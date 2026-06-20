@@ -162,6 +162,42 @@ fn opt_str<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(|x| x.as_str())
 }
 
+/// Resolve the JSON body for a `_search` / `_count`. An explicit `body` field
+/// is sent verbatim. Otherwise the `query` field is taken as either a full
+/// search body (when it carries a top-level `query`/`aggs`/`size`/… key) or a
+/// bare query clause (e.g. `{"match":{…}}` from a builder), which is wrapped
+/// as `{"query": <clause>}`. So `Search::search(idx, Search::match(…))` and a
+/// hand-built `{ size, query, aggs }` body both work.
+fn search_body(v: &Value) -> Option<String> {
+    if let Some(b) = v.get("body").filter(|b| !b.is_null()) {
+        return Some(b.to_string());
+    }
+    let q = v.get("query").filter(|b| !b.is_null())?;
+    const FULL_BODY_KEYS: &[&str] = &[
+        "query",
+        "aggs",
+        "aggregations",
+        "size",
+        "from",
+        "sort",
+        "_source",
+        "highlight",
+        "track_total_hits",
+        "search_after",
+        "pit",
+        "collapse",
+        "suggest",
+    ];
+    let is_full = q
+        .as_object()
+        .is_some_and(|o| FULL_BODY_KEYS.iter().any(|k| o.contains_key(*k)));
+    Some(if is_full {
+        q.to_string()
+    } else {
+        json!({ "query": q }).to_string()
+    })
+}
+
 /// Append `?a=b&c=d` to `path` from the opts dict's `params` object, if any.
 fn with_params(path: String, opts: &Value) -> String {
     let Some(params) = opts.get("params").and_then(|p| p.as_object()) else {
@@ -505,16 +541,11 @@ pub extern "C" fn search__bulk(args: *const c_char) -> *const c_char {
 pub extern "C" fn search__search(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let index = opt_str(&v, "index").unwrap_or("_all");
-        let body = v
-            .get("query")
-            .or_else(|| v.get("body"))
-            .filter(|b| !b.is_null())
-            .map(|b| b.to_string());
         req_json(
             &v,
             "POST",
             &with_params(format!("/{}/_search", index), &v),
-            body,
+            search_body(&v),
         )
     })
 }
@@ -523,12 +554,7 @@ pub extern "C" fn search__search(args: *const c_char) -> *const c_char {
 pub extern "C" fn search__count(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let index = opt_str(&v, "index").unwrap_or("_all");
-        let body = v
-            .get("query")
-            .or_else(|| v.get("body"))
-            .filter(|b| !b.is_null())
-            .map(|b| b.to_string());
-        req_json(&v, "POST", &format!("/{}/_count", index), body)
+        req_json(&v, "POST", &format!("/{}/_count", index), search_body(&v))
     })
 }
 
@@ -558,16 +584,11 @@ pub extern "C" fn search__scroll_start(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let index = opt_str(&v, "index").unwrap_or("_all");
         let keep = opt_str(&v, "scroll").unwrap_or("1m");
-        let body = v
-            .get("query")
-            .or_else(|| v.get("body"))
-            .filter(|b| !b.is_null())
-            .map(|b| b.to_string());
         req_json(
             &v,
             "POST",
             &format!("/{}/_search?scroll={}", index, urlencode(keep)),
-            body,
+            search_body(&v),
         )
     })
 }
@@ -687,11 +708,457 @@ pub extern "C" fn search__raw(args: *const c_char) -> *const c_char {
     })
 }
 
+// ── aggregations runner ─────────────────────────────────────────────────────
+
+/// Run an aggregations-only search: `{ size: 0, aggs: <aggs>, query?: <query> }`.
+/// Returns the cluster response (the `aggregations` block lives under
+/// `.aggregations`). Pass `size` to also return hits.
+#[no_mangle]
+pub extern "C" fn search__search_aggs(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        let aggs = v
+            .get("aggs")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing aggs"))?;
+        let mut body = serde_json::Map::new();
+        let size = v.get("size").cloned().unwrap_or(json!(0));
+        body.insert("size".into(), size);
+        body.insert("aggs".into(), aggs);
+        if let Some(q) = v.get("query").filter(|x| !x.is_null()) {
+            body.insert("query".into(), q.clone());
+        }
+        req_json(
+            &v,
+            "POST",
+            &format!("/{}/_search", index),
+            Some(Value::Object(body).to_string()),
+        )
+    })
+}
+
+// ── field caps + term vectors ───────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__field_caps(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        let fields = string_vec(v.get("fields").unwrap_or(&Value::Null))?;
+        let path = format!(
+            "/{}/_field_caps?fields={}",
+            index,
+            urlencode(&fields.join(","))
+        );
+        req_json(&v, "GET", &path, None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__termvectors(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = str_field(&v, "index")?;
+        let body = v
+            .get("body")
+            .filter(|b| !b.is_null())
+            .map(|b| b.to_string());
+        let path = match opt_str(&v, "id") {
+            Some(id) => format!("/{}/_termvectors/{}", index, id),
+            None => format!("/{}/_termvectors", index),
+        };
+        req_json(&v, "POST", &path, body)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__mtermvectors(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let body = str_or_obj(&v, "body")?;
+        let path = match opt_str(&v, "index") {
+            Some(i) => format!("/{}/_mtermvectors", i),
+            None => "/_mtermvectors".to_string(),
+        };
+        req_json(&v, "POST", &path, Some(body))
+    })
+}
+
+// ── index + component templates ─────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__index_template_put(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let name = str_field(&v, "name")?;
+        let body = str_or_obj(&v, "body")?;
+        req_json(&v, "PUT", &format!("/_index_template/{}", name), Some(body))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__index_template_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let path = match opt_str(&v, "name") {
+            Some(n) => format!("/_index_template/{}", n),
+            None => "/_index_template".to_string(),
+        };
+        req_json(&v, "GET", &path, None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__index_template_delete(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let name = str_field(&v, "name")?;
+        req_json(&v, "DELETE", &format!("/_index_template/{}", name), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__index_template_exists(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let name = str_field(&v, "name")?;
+        Ok(json!({"value": req_exists(&v, &format!("/_index_template/{}", name))?}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__component_template_put(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let name = str_field(&v, "name")?;
+        let body = str_or_obj(&v, "body")?;
+        req_json(
+            &v,
+            "PUT",
+            &format!("/_component_template/{}", name),
+            Some(body),
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__component_template_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let path = match opt_str(&v, "name") {
+            Some(n) => format!("/_component_template/{}", n),
+            None => "/_component_template".to_string(),
+        };
+        req_json(&v, "GET", &path, None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__component_template_delete(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let name = str_field(&v, "name")?;
+        req_json(
+            &v,
+            "DELETE",
+            &format!("/_component_template/{}", name),
+            None,
+        )
+    })
+}
+
+// ── ingest pipelines ────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__ingest_put(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let id = str_field(&v, "id")?;
+        let body = str_or_obj(&v, "body")?;
+        req_json(&v, "PUT", &format!("/_ingest/pipeline/{}", id), Some(body))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__ingest_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let path = match opt_str(&v, "id") {
+            Some(id) => format!("/_ingest/pipeline/{}", id),
+            None => "/_ingest/pipeline".to_string(),
+        };
+        req_json(&v, "GET", &path, None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__ingest_delete(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let id = str_field(&v, "id")?;
+        req_json(&v, "DELETE", &format!("/_ingest/pipeline/{}", id), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__ingest_simulate(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let body = str_or_obj(&v, "body")?;
+        let path = match opt_str(&v, "id") {
+            Some(id) => format!("/_ingest/pipeline/{}/_simulate", id),
+            None => "/_ingest/pipeline/_simulate".to_string(),
+        };
+        req_json(&v, "POST", &path, Some(body))
+    })
+}
+
+// ── point in time ───────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__pit_open(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = str_field(&v, "index")?;
+        let keep = opt_str(&v, "keep_alive").unwrap_or("1m");
+        req_json(
+            &v,
+            "POST",
+            &format!("/{}/_pit?keep_alive={}", index, urlencode(keep)),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__pit_close(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let id = str_field(&v, "id")?;
+        let body = json!({ "id": id });
+        req_json(&v, "DELETE", "/_pit", Some(body.to_string()))
+    })
+}
+
+// ── snapshot + repository admin ─────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__repo_create(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = str_field(&v, "repo")?;
+        let body = str_or_obj(&v, "body")?;
+        req_json(&v, "PUT", &format!("/_snapshot/{}", repo), Some(body))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__repo_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = opt_str(&v, "repo").unwrap_or("_all");
+        req_json(&v, "GET", &format!("/_snapshot/{}", repo), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__repo_delete(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = str_field(&v, "repo")?;
+        req_json(&v, "DELETE", &format!("/_snapshot/{}", repo), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__snapshot_create(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = str_field(&v, "repo")?;
+        let snapshot = str_field(&v, "snapshot")?;
+        let body = v
+            .get("body")
+            .filter(|b| !b.is_null())
+            .map(|b| b.to_string());
+        req_json(
+            &v,
+            "PUT",
+            &with_params(format!("/_snapshot/{}/{}", repo, snapshot), &v),
+            body,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__snapshot_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = str_field(&v, "repo")?;
+        let snapshot = opt_str(&v, "snapshot").unwrap_or("_all");
+        req_json(
+            &v,
+            "GET",
+            &format!("/_snapshot/{}/{}", repo, snapshot),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__snapshot_delete(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = str_field(&v, "repo")?;
+        let snapshot = str_field(&v, "snapshot")?;
+        req_json(
+            &v,
+            "DELETE",
+            &format!("/_snapshot/{}/{}", repo, snapshot),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__snapshot_restore(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let repo = str_field(&v, "repo")?;
+        let snapshot = str_field(&v, "snapshot")?;
+        let body = v
+            .get("body")
+            .filter(|b| !b.is_null())
+            .map(|b| b.to_string());
+        req_json(
+            &v,
+            "POST",
+            &format!("/_snapshot/{}/{}/_restore", repo, snapshot),
+            body,
+        )
+    })
+}
+
+// ── tasks ───────────────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__tasks_list(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        req_json(&v, "GET", &with_params("/_tasks".into(), &v), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__tasks_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let task_id = str_field(&v, "task_id")?;
+        req_json(&v, "GET", &format!("/_tasks/{}", task_id), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__tasks_cancel(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let task_id = str_field(&v, "task_id")?;
+        req_json(&v, "POST", &format!("/_tasks/{}/_cancel", task_id), None)
+    })
+}
+
+// ── cluster + nodes ─────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__cluster_stats(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| req_json(&v, "GET", "/_cluster/stats", None))
+}
+
+#[no_mangle]
+pub extern "C" fn search__cluster_state(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| req_json(&v, "GET", "/_cluster/state", None))
+}
+
+#[no_mangle]
+pub extern "C" fn search__cluster_settings_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        req_json(
+            &v,
+            "GET",
+            &with_params("/_cluster/settings".into(), &v),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__cluster_settings_put(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let body = str_or_obj(&v, "body")?;
+        req_json(&v, "PUT", "/_cluster/settings", Some(body))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__nodes_info(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| req_json(&v, "GET", "/_nodes", None))
+}
+
+#[no_mangle]
+pub extern "C" fn search__nodes_stats(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| req_json(&v, "GET", "/_nodes/stats", None))
+}
+
+#[no_mangle]
+pub extern "C" fn search__pending_tasks(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        req_json(&v, "GET", "/_cluster/pending_tasks", None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__allocation_explain(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let body = v
+            .get("body")
+            .filter(|b| !b.is_null())
+            .map(|b| b.to_string());
+        req_json(&v, "POST", "/_cluster/allocation/explain", body)
+    })
+}
+
+// ── stored scripts + search templates ───────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn search__script_put(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let id = str_field(&v, "id")?;
+        let body = str_or_obj(&v, "body")?;
+        req_json(&v, "PUT", &format!("/_scripts/{}", id), Some(body))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__script_get(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let id = str_field(&v, "id")?;
+        req_json(&v, "GET", &format!("/_scripts/{}", id), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__script_delete(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let id = str_field(&v, "id")?;
+        req_json(&v, "DELETE", &format!("/_scripts/{}", id), None)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__search_template(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        let body = str_or_obj(&v, "body")?;
+        req_json(
+            &v,
+            "POST",
+            &format!("/{}/_search/template", index),
+            Some(body),
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__render_template(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let body = str_or_obj(&v, "body")?;
+        req_json(&v, "POST", "/_render/template", Some(body))
+    })
+}
+
 // ── pure query-DSL builders (no network) ────────────────────────────────────
+//
+// Each builder returns a *bare query clause* (e.g. `{"match":{…}}`), not a full
+// `{"query":…}` body. Bare clauses nest directly inside `bool`, `constant_score`,
+// `nested`, etc.; `Search::search` / `::count` auto-wrap a top-level clause as
+// `{"query": clause}` (see `search_body`).
 
 #[no_mangle]
 pub extern "C" fn search__match_all(args: *const c_char) -> *const c_char {
-    ffi_call(args, |_| Ok(json!({"value": {"query": {"match_all": {}}}})))
+    ffi_call(args, |_| Ok(json!({"value": {"match_all": {}}})))
 }
 
 #[no_mangle]
@@ -699,7 +1166,25 @@ pub extern "C" fn search__match_query(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let field = str_field(&v, "field")?;
         let value = v.get("value").cloned().unwrap_or(Value::Null);
-        Ok(json!({"value": {"query": {"match": {field: value}}}}))
+        Ok(json!({"value": {"match": {field: value}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__match_phrase(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let value = v.get("value").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"match_phrase": {field: value}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__match_phrase_prefix(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let value = v.get("value").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"match_phrase_prefix": {field: value}}}))
     })
 }
 
@@ -708,7 +1193,7 @@ pub extern "C" fn search__term_query(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let field = str_field(&v, "field")?;
         let value = v.get("value").cloned().unwrap_or(Value::Null);
-        Ok(json!({"value": {"query": {"term": {field: {"value": value}}}}}))
+        Ok(json!({"value": {"term": {field: {"value": value}}}}))
     })
 }
 
@@ -717,7 +1202,7 @@ pub extern "C" fn search__terms_query(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let field = str_field(&v, "field")?;
         let values = v.get("values").cloned().unwrap_or(json!([]));
-        Ok(json!({"value": {"query": {"terms": {field: values}}}}))
+        Ok(json!({"value": {"terms": {field: values}}}))
     })
 }
 
@@ -726,12 +1211,98 @@ pub extern "C" fn search__range_query(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let field = str_field(&v, "field")?;
         let mut spec = serde_json::Map::new();
-        for k in ["gt", "gte", "lt", "lte", "format", "time_zone"] {
+        for k in ["gt", "gte", "lt", "lte", "format", "time_zone", "boost"] {
             if let Some(val) = v.get(k).filter(|x| !x.is_null()) {
                 spec.insert(k.to_string(), val.clone());
             }
         }
-        Ok(json!({"value": {"query": {"range": {field: spec}}}}))
+        Ok(json!({"value": {"range": {field: spec}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__prefix_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let value = v.get("value").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"prefix": {field: {"value": value}}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__wildcard_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let value = v.get("value").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"wildcard": {field: {"value": value}}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__regexp_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let value = v.get("value").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"regexp": {field: {"value": value}}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__fuzzy_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let value = v.get("value").cloned().unwrap_or(Value::Null);
+        let mut spec = serde_json::Map::new();
+        spec.insert("value".into(), value);
+        if let Some(f) = v.get("fuzziness").filter(|x| !x.is_null()) {
+            spec.insert("fuzziness".into(), f.clone());
+        }
+        Ok(json!({"value": {"fuzzy": {field: spec}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__exists_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        Ok(json!({"value": {"exists": {"field": field}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__ids_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let values = string_vec(v.get("values").unwrap_or(&Value::Null))?;
+        Ok(json!({"value": {"ids": {"values": values}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__query_string(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let query = str_field(&v, "query")?;
+        let mut qs = serde_json::Map::new();
+        qs.insert("query".into(), json!(query));
+        if let Some(f) = v.get("default_field").filter(|x| !x.is_null()) {
+            qs.insert("default_field".into(), f.clone());
+        }
+        if let Some(f) = v.get("fields").filter(|x| !x.is_null()) {
+            qs.insert("fields".into(), f.clone());
+        }
+        Ok(json!({"value": {"query_string": qs}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__simple_query_string(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let query = str_field(&v, "query")?;
+        let mut qs = serde_json::Map::new();
+        qs.insert("query".into(), json!(query));
+        if let Some(f) = v.get("fields").filter(|x| !x.is_null()) {
+            qs.insert("fields".into(), f.clone());
+        }
+        Ok(json!({"value": {"simple_query_string": qs}}))
     })
 }
 
@@ -746,7 +1317,56 @@ pub extern "C" fn search__multi_match(args: *const c_char) -> *const c_char {
         if let Some(t) = v.get("type").filter(|x| !x.is_null()) {
             mm.insert("type".into(), t.clone());
         }
-        Ok(json!({"value": {"query": {"multi_match": mm}}}))
+        Ok(json!({"value": {"multi_match": mm}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__geo_distance_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let distance = str_field(&v, "distance")?;
+        let lat = v.get("lat").cloned().unwrap_or(Value::Null);
+        let lon = v.get("lon").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"geo_distance": {
+            "distance": distance,
+            field: {"lat": lat, "lon": lon},
+        }}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__nested_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let path = str_field(&v, "path")?;
+        let query = v.get("query").cloned().unwrap_or(json!({"match_all": {}}));
+        Ok(json!({"value": {"nested": {"path": path, "query": query}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__constant_score(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let filter = v.get("filter").cloned().unwrap_or(json!({"match_all": {}}));
+        let mut cs = serde_json::Map::new();
+        cs.insert("filter".into(), filter);
+        if let Some(b) = v.get("boost").filter(|x| !x.is_null()) {
+            cs.insert("boost".into(), b.clone());
+        }
+        Ok(json!({"value": {"constant_score": cs}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__dis_max(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let queries = v.get("queries").cloned().unwrap_or(json!([]));
+        let mut dm = serde_json::Map::new();
+        dm.insert("queries".into(), queries);
+        if let Some(t) = v.get("tie_breaker").filter(|x| !x.is_null()) {
+            dm.insert("tie_breaker".into(), t.clone());
+        }
+        Ok(json!({"value": {"dis_max": dm}}))
     })
 }
 
@@ -762,7 +1382,207 @@ pub extern "C" fn search__bool_query(args: *const c_char) -> *const c_char {
         if let Some(m) = v.get("minimum_should_match").filter(|x| !x.is_null()) {
             b.insert("minimum_should_match".into(), m.clone());
         }
-        Ok(json!({"value": {"query": {"bool": b}}}))
+        Ok(json!({"value": {"bool": b}}))
+    })
+}
+
+// ── full-body composers + aggregations ──────────────────────────────────────
+
+/// Compose a full search body from optional parts: `query` (a bare clause —
+/// auto-wrapped), `aggs`, `sort`, `size`, `from`, `_source`, `highlight`,
+/// `track_total_hits`, `search_after`. Returns the assembled body ready for
+/// `Search::search`.
+#[no_mangle]
+pub extern "C" fn search__query_body(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let mut body = serde_json::Map::new();
+        if let Some(q) = v.get("query").filter(|x| !x.is_null()) {
+            body.insert("query".into(), q.clone());
+        }
+        for k in [
+            "aggs",
+            "sort",
+            "size",
+            "from",
+            "_source",
+            "highlight",
+            "track_total_hits",
+            "search_after",
+            "collapse",
+        ] {
+            if let Some(val) = v.get(k).filter(|x| !x.is_null()) {
+                body.insert(k.to_string(), val.clone());
+            }
+        }
+        Ok(json!({ "value": Value::Object(body) }))
+    })
+}
+
+/// Build a single aggregation definition `{ <type>: <spec> }` for nesting under
+/// a search body's `aggs`. `agg_type` names the aggregation (`terms`, `avg`,
+/// `date_histogram`, …); the remaining fields become its spec.
+#[no_mangle]
+pub extern "C" fn search__agg(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let agg_type = str_field(&v, "agg_type")?;
+        let spec = v.get("spec").cloned().unwrap_or(json!({}));
+        Ok(json!({ "value": { agg_type: spec } }))
+    })
+}
+
+/// terms bucket aggregation on `field` (optional `size`).
+#[no_mangle]
+pub extern "C" fn search__agg_terms(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let mut spec = serde_json::Map::new();
+        spec.insert("field".into(), json!(field));
+        if let Some(s) = v.get("size").filter(|x| !x.is_null()) {
+            spec.insert("size".into(), s.clone());
+        }
+        Ok(json!({"value": {"terms": spec}}))
+    })
+}
+
+/// Single-field metric aggregations sharing the `{ <metric>: { field } }` shape.
+fn metric_agg(v: &Value, metric: &str) -> Result<Value> {
+    let field = str_field(v, "field")?;
+    Ok(json!({"value": {metric: {"field": field}}}))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_avg(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "avg"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_sum(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "sum"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_min(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "min"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_max(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "max"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_stats(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "stats"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_extended_stats(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "extended_stats"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_cardinality(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "cardinality"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_value_count(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| metric_agg(&v, "value_count"))
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_percentiles(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let mut spec = serde_json::Map::new();
+        spec.insert("field".into(), json!(field));
+        if let Some(p) = v.get("percents").filter(|x| !x.is_null()) {
+            spec.insert("percents".into(), p.clone());
+        }
+        Ok(json!({"value": {"percentiles": spec}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_histogram(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let interval = v.get("interval").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"histogram": {"field": field, "interval": interval}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_date_histogram(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let mut spec = serde_json::Map::new();
+        spec.insert("field".into(), json!(field));
+        // ES 8 uses calendar_interval / fixed_interval; accept either.
+        for k in ["calendar_interval", "fixed_interval", "format", "time_zone"] {
+            if let Some(val) = v.get(k).filter(|x| !x.is_null()) {
+                spec.insert(k.to_string(), val.clone());
+            }
+        }
+        Ok(json!({"value": {"date_histogram": spec}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_range(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let ranges = v.get("ranges").cloned().unwrap_or(json!([]));
+        Ok(json!({"value": {"range": {"field": field, "ranges": ranges}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_filter(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let filter = v.get("filter").cloned().unwrap_or(json!({"match_all": {}}));
+        Ok(json!({"value": {"filter": filter}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_missing(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        Ok(json!({"value": {"missing": {"field": field}}}))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__agg_nested(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let path = str_field(&v, "path")?;
+        Ok(json!({"value": {"nested": {"path": path}}}))
+    })
+}
+
+// ── full-body field helpers ─────────────────────────────────────────────────
+
+/// Build a sort clause `[{ field: { order } }]` (order defaults to "asc").
+#[no_mangle]
+pub extern "C" fn search__sort_clause(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let order = opt_str(&v, "order").unwrap_or("asc");
+        Ok(json!({"value": [{field: {"order": order}}]}))
+    })
+}
+
+/// Build a highlight clause highlighting the given fields.
+#[no_mangle]
+pub extern "C" fn search__highlight_clause(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let fields = string_vec(v.get("fields").unwrap_or(&Value::Null))?;
+        let mut hf = serde_json::Map::new();
+        for f in fields {
+            hf.insert(f, json!({}));
+        }
+        Ok(json!({"value": {"fields": hf}}))
     })
 }
 
@@ -1063,5 +1883,48 @@ mod tests {
     fn urlencode_encodes_reserved() {
         assert_eq!(urlencode("a b/c"), "a%20b%2Fc");
         assert_eq!(urlencode("plain-_.~"), "plain-_.~");
+    }
+
+    #[test]
+    fn search_body_wraps_bare_clause() {
+        let v = json!({"query": {"match": {"t": "rust"}}});
+        assert_eq!(
+            search_body(&v).unwrap(),
+            r#"{"query":{"match":{"t":"rust"}}}"#
+        );
+    }
+
+    #[test]
+    fn search_body_passes_full_body_through() {
+        // a clause carrying a full-body key (aggs) is sent verbatim, not wrapped
+        let v = json!({"query": {"size": 0, "aggs": {"x": {"avg": {"field": "n"}}}}});
+        let body = search_body(&v).unwrap();
+        assert!(body.contains("\"aggs\""));
+        assert!(
+            !body.contains("\"query\":{\"size\""),
+            "must not double-wrap: {body}"
+        );
+    }
+
+    #[test]
+    fn search_body_explicit_body_field_wins() {
+        let v = json!({"body": {"query": {"match_all": {}}}, "query": {"match": {"a": "b"}}});
+        let body = search_body(&v).unwrap();
+        assert!(body.contains("match_all"));
+        assert!(!body.contains("\"a\""));
+    }
+
+    #[test]
+    fn search_body_none_when_empty() {
+        assert!(search_body(&json!({})).is_none());
+    }
+
+    #[test]
+    fn metric_agg_shape() {
+        assert_eq!(
+            metric_agg(&json!({"field": "price"}), "avg").unwrap(),
+            json!({"value": {"avg": {"field": "price"}}})
+        );
+        assert!(metric_agg(&json!({}), "sum").is_err());
     }
 }

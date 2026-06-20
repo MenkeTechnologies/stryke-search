@@ -392,3 +392,469 @@ fn Search::redact_url ($url) {
     val $r = { url => $url }
     Search::_decode("redact_url", search__redact_url(to_json($r)))->{value}
 }
+
+# ── more query-DSL builders (no connection) ───────────────────────────
+
+## Phrase match on $field.
+fn Search::match_phrase ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("match_phrase", search__match_phrase(to_json($r)))->{value}
+}
+
+## Phrase-prefix match on $field (last term is a prefix).
+fn Search::match_phrase_prefix ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("match_phrase_prefix", search__match_phrase_prefix(to_json($r)))->{value}
+}
+
+## Prefix term query on $field.
+fn Search::prefix ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("prefix", search__prefix_query(to_json($r)))->{value}
+}
+
+## Wildcard term query on $field (`*` and `?` wildcards).
+fn Search::wildcard ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("wildcard", search__wildcard_query(to_json($r)))->{value}
+}
+
+## Regexp term query on $field.
+fn Search::regexp ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("regexp", search__regexp_query(to_json($r)))->{value}
+}
+
+## Fuzzy term query on $field. %opts{fuzziness} optional (e.g. "AUTO", 2).
+fn Search::fuzzy ($field, $value, %opts) {
+    val $r = { field => $field, value => $value, fuzziness => $opts{fuzziness} }
+    Search::_decode("fuzzy", search__fuzzy_query(to_json($r)))->{value}
+}
+
+## Documents where $field exists (is non-null).
+fn Search::exists ($field) {
+    val $r = { field => $field }
+    Search::_decode("exists", search__exists_query(to_json($r)))->{value}
+}
+
+## Match by document ids. $values: arrayref.
+fn Search::ids ($values) {
+    val $list = ref($values) eq "ARRAY" ? $values : [$values]
+    val $r = { values => $list }
+    Search::_decode("ids", search__ids_query(to_json($r)))->{value}
+}
+
+## Lucene query_string. %opts{default_field} or %opts{fields} optional.
+fn Search::query_string ($query, %opts) {
+    val $r = { query => $query, default_field => $opts{default_field}, fields => $opts{fields} }
+    Search::_decode("query_string", search__query_string(to_json($r)))->{value}
+}
+
+## simple_query_string (lenient syntax). %opts{fields} optional (arrayref).
+fn Search::simple_query_string ($query, %opts) {
+    val $r = { query => $query, fields => $opts{fields} }
+    Search::_decode("simple_query_string", search__simple_query_string(to_json($r)))->{value}
+}
+
+## geo_distance query — docs within $distance of ($lat, $lon) on $field.
+fn Search::geo_distance ($field, $lat, $lon, $distance) {
+    val $r = { field => $field, lat => $lat, lon => $lon, distance => $distance }
+    Search::_decode("geo_distance", search__geo_distance_query(to_json($r)))->{value}
+}
+
+## nested query over $path with an inner $query clause.
+fn Search::nested ($path, $query) {
+    val $r = { path => $path, query => $query }
+    Search::_decode("nested", search__nested_query(to_json($r)))->{value}
+}
+
+## constant_score wrapping a $filter clause. %opts{boost} optional.
+fn Search::constant_score ($filter, %opts) {
+    val $r = { filter => $filter, boost => $opts{boost} }
+    Search::_decode("constant_score", search__constant_score(to_json($r)))->{value}
+}
+
+## dis_max over $queries (arrayref of clauses). %opts{tie_breaker} optional.
+fn Search::dis_max ($queries, %opts) {
+    val $list = ref($queries) eq "ARRAY" ? $queries : [$queries]
+    val $r = { queries => $list, tie_breaker => $opts{tie_breaker} }
+    Search::_decode("dis_max", search__dis_max(to_json($r)))->{value}
+}
+
+# ── full-body composers + field helpers (no connection) ───────────────
+
+## Compose a full search body. %parts: query, aggs, sort, size, from,
+## _source, highlight, track_total_hits, search_after, collapse.
+fn Search::query_body (%parts) {
+    Search::_decode("query_body", search__query_body(to_json(\%parts)))->{value}
+}
+
+## Sort clause `[{ $field => { order } }]`. %opts{order} default "asc".
+fn Search::sort ($field, %opts) {
+    val $r = { field => $field, order => $opts{order} // "asc" }
+    Search::_decode("sort", search__sort_clause(to_json($r)))->{value}
+}
+
+## Highlight clause for $fields (arrayref).
+fn Search::highlight ($fields) {
+    val $list = ref($fields) eq "ARRAY" ? $fields : [$fields]
+    val $r = { fields => $list }
+    Search::_decode("highlight", search__highlight_clause(to_json($r)))->{value}
+}
+
+# ── aggregation builders (no connection) ──────────────────────────────
+
+## Generic single aggregation `{ $agg_type => $spec }`.
+fn Search::agg ($agg_type, $spec) {
+    val $r = { agg_type => $agg_type, spec => $spec }
+    Search::_decode("agg", search__agg(to_json($r)))->{value}
+}
+
+## terms bucket aggregation on $field. %opts{size} optional.
+fn Search::agg_terms ($field, %opts) {
+    val $r = { field => $field, size => $opts{size} }
+    Search::_decode("agg_terms", search__agg_terms(to_json($r)))->{value}
+}
+
+## Metric aggregations on a single $field.
+fn Search::agg_avg ($field) {
+    Search::_decode("agg_avg", search__agg_avg(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_sum ($field) {
+    Search::_decode("agg_sum", search__agg_sum(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_min ($field) {
+    Search::_decode("agg_min", search__agg_min(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_max ($field) {
+    Search::_decode("agg_max", search__agg_max(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_stats ($field) {
+    Search::_decode("agg_stats", search__agg_stats(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_extended_stats ($field) {
+    Search::_decode("agg_extended_stats", search__agg_extended_stats(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_cardinality ($field) {
+    Search::_decode("agg_cardinality", search__agg_cardinality(to_json({ field => $field })))->{value}
+}
+
+fn Search::agg_value_count ($field) {
+    Search::_decode("agg_value_count", search__agg_value_count(to_json({ field => $field })))->{value}
+}
+
+## percentiles on $field. %opts{percents} optional (arrayref).
+fn Search::agg_percentiles ($field, %opts) {
+    val $r = { field => $field, percents => $opts{percents} }
+    Search::_decode("agg_percentiles", search__agg_percentiles(to_json($r)))->{value}
+}
+
+## Numeric histogram on $field with $interval.
+fn Search::agg_histogram ($field, $interval) {
+    val $r = { field => $field, interval => $interval }
+    Search::_decode("agg_histogram", search__agg_histogram(to_json($r)))->{value}
+}
+
+## date_histogram on $field. %opts: calendar_interval | fixed_interval,
+## format, time_zone.
+fn Search::agg_date_histogram ($field, %opts) {
+    var %r = %opts
+    $r{field} = $field
+    Search::_decode("agg_date_histogram", search__agg_date_histogram(to_json(\%r)))->{value}
+}
+
+## range aggregation on $field with $ranges (arrayref of {from,to,key?}).
+fn Search::agg_range ($field, $ranges) {
+    val $r = { field => $field, ranges => $ranges }
+    Search::_decode("agg_range", search__agg_range(to_json($r)))->{value}
+}
+
+## filter aggregation scoping sub-aggs to a $filter clause.
+fn Search::agg_filter ($filter) {
+    val $r = { filter => $filter }
+    Search::_decode("agg_filter", search__agg_filter(to_json($r)))->{value}
+}
+
+## missing-bucket aggregation on $field.
+fn Search::agg_missing ($field) {
+    Search::_decode("agg_missing", search__agg_missing(to_json({ field => $field })))->{value}
+}
+
+## nested aggregation over $path.
+fn Search::agg_nested ($path) {
+    Search::_decode("agg_nested", search__agg_nested(to_json({ path => $path })))->{value}
+}
+
+# ── aggregations runner ───────────────────────────────────────────────
+
+## Run an aggregations search: `{ size:0, aggs:$aggs, query?:... }`. The
+## `aggregations` block is on the response under `->{aggregations}`.
+## %opts{query} scopes the aggs; %opts{size} returns hits too.
+fn Search::search_aggs ($index, $aggs, %opts) {
+    val $r = Search::_req(
+        { index => $index, aggs => $aggs, query => $opts{query}, size => $opts{size} },
+        \%opts
+    )
+    Search::_decode("search_aggs", search__search_aggs(to_json($r)))
+}
+
+# ── field caps + term vectors ─────────────────────────────────────────
+
+## field_caps for $fields (arrayref) across %opts{index} (default `_all`).
+fn Search::field_caps ($fields, %opts) {
+    val $list = ref($fields) eq "ARRAY" ? $fields : [$fields]
+    val $r = Search::_req({ index => $opts{index}, fields => $list }, \%opts)
+    Search::_decode("field_caps", search__field_caps(to_json($r)))
+}
+
+## Term vectors for a document. %opts{id} for an existing doc; %opts{body}
+## for an artificial doc / options.
+fn Search::termvectors ($index, %opts) {
+    val $r = Search::_req({ index => $index, id => $opts{id}, body => $opts{body} }, \%opts)
+    Search::_decode("termvectors", search__termvectors(to_json($r)))
+}
+
+## Multi term vectors. $body: docs/ids request (hashref or JSON).
+fn Search::mtermvectors ($body, %opts) {
+    val $r = Search::_req({ index => $opts{index}, body => $body }, \%opts)
+    Search::_decode("mtermvectors", search__mtermvectors(to_json($r)))
+}
+
+# ── index + component templates ───────────────────────────────────────
+
+## Create/update an index template $name. $body: hashref or JSON.
+fn Search::index_template_put ($name, $body, %opts) {
+    val $r = Search::_req({ name => $name, body => $body }, \%opts)
+    Search::_decode("index_template_put", search__index_template_put(to_json($r)))
+}
+
+## Get index template(s). %opts{name} for one, omit for all.
+fn Search::index_template_get (%opts) {
+    val $r = Search::_req({ name => $opts{name} }, \%opts)
+    Search::_decode("index_template_get", search__index_template_get(to_json($r)))
+}
+
+## Delete index template $name.
+fn Search::index_template_delete ($name, %opts) {
+    val $r = Search::_req({ name => $name }, \%opts)
+    Search::_decode("index_template_delete", search__index_template_delete(to_json($r)))
+}
+
+## True when index template $name exists.
+fn Search::index_template_exists ($name, %opts) {
+    val $r = Search::_req({ name => $name }, \%opts)
+    Search::_decode("index_template_exists", search__index_template_exists(to_json($r)))->{value}
+}
+
+## Create/update a component template $name.
+fn Search::component_template_put ($name, $body, %opts) {
+    val $r = Search::_req({ name => $name, body => $body }, \%opts)
+    Search::_decode("component_template_put", search__component_template_put(to_json($r)))
+}
+
+## Get component template(s). %opts{name} for one, omit for all.
+fn Search::component_template_get (%opts) {
+    val $r = Search::_req({ name => $opts{name} }, \%opts)
+    Search::_decode("component_template_get", search__component_template_get(to_json($r)))
+}
+
+## Delete component template $name.
+fn Search::component_template_delete ($name, %opts) {
+    val $r = Search::_req({ name => $name }, \%opts)
+    Search::_decode("component_template_delete", search__component_template_delete(to_json($r)))
+}
+
+# ── ingest pipelines ──────────────────────────────────────────────────
+
+## Create/update ingest pipeline $id. $body: { description, processors }.
+fn Search::ingest_put ($id, $body, %opts) {
+    val $r = Search::_req({ id => $id, body => $body }, \%opts)
+    Search::_decode("ingest_put", search__ingest_put(to_json($r)))
+}
+
+## Get ingest pipeline(s). %opts{id} for one, omit for all.
+fn Search::ingest_get (%opts) {
+    val $r = Search::_req({ id => $opts{id} }, \%opts)
+    Search::_decode("ingest_get", search__ingest_get(to_json($r)))
+}
+
+## Delete ingest pipeline $id.
+fn Search::ingest_delete ($id, %opts) {
+    val $r = Search::_req({ id => $id }, \%opts)
+    Search::_decode("ingest_delete", search__ingest_delete(to_json($r)))
+}
+
+## Simulate a pipeline against sample docs. $body: { docs, pipeline? }.
+## %opts{id} simulates a stored pipeline.
+fn Search::ingest_simulate ($body, %opts) {
+    val $r = Search::_req({ id => $opts{id}, body => $body }, \%opts)
+    Search::_decode("ingest_simulate", search__ingest_simulate(to_json($r)))
+}
+
+# ── point in time ─────────────────────────────────────────────────────
+
+## Open a point-in-time on $index. %opts{keep_alive} default "1m". Returns
+## `{ id => ... }`; pass that id in a search body's `pit`.
+fn Search::pit_open ($index, %opts) {
+    val $r = Search::_req({ index => $index, keep_alive => $opts{keep_alive} }, \%opts)
+    Search::_decode("pit_open", search__pit_open(to_json($r)))
+}
+
+## Close a point-in-time by $id.
+fn Search::pit_close ($id, %opts) {
+    val $r = Search::_req({ id => $id }, \%opts)
+    Search::_decode("pit_close", search__pit_close(to_json($r)))
+}
+
+# ── snapshot + repository admin ───────────────────────────────────────
+
+## Register a snapshot repository $repo. $body: { type, settings }.
+fn Search::repo_create ($repo, $body, %opts) {
+    val $r = Search::_req({ repo => $repo, body => $body }, \%opts)
+    Search::_decode("repo_create", search__repo_create(to_json($r)))
+}
+
+## Get snapshot repositories. %opts{repo} for one, omit for all.
+fn Search::repo_get (%opts) {
+    val $r = Search::_req({ repo => $opts{repo} }, \%opts)
+    Search::_decode("repo_get", search__repo_get(to_json($r)))
+}
+
+## Delete snapshot repository $repo.
+fn Search::repo_delete ($repo, %opts) {
+    val $r = Search::_req({ repo => $repo }, \%opts)
+    Search::_decode("repo_delete", search__repo_delete(to_json($r)))
+}
+
+## Create snapshot $snapshot in $repo. %opts{body} optional; %opts{params}
+## can carry `wait_for_completion`.
+fn Search::snapshot_create ($repo, $snapshot, %opts) {
+    val $r = Search::_req({ repo => $repo, snapshot => $snapshot, body => $opts{body} }, \%opts)
+    Search::_decode("snapshot_create", search__snapshot_create(to_json($r)))
+}
+
+## Get snapshot(s) in $repo. %opts{snapshot} for one (default `_all`).
+fn Search::snapshot_get ($repo, %opts) {
+    val $r = Search::_req({ repo => $repo, snapshot => $opts{snapshot} }, \%opts)
+    Search::_decode("snapshot_get", search__snapshot_get(to_json($r)))
+}
+
+## Delete snapshot $snapshot from $repo.
+fn Search::snapshot_delete ($repo, $snapshot, %opts) {
+    val $r = Search::_req({ repo => $repo, snapshot => $snapshot }, \%opts)
+    Search::_decode("snapshot_delete", search__snapshot_delete(to_json($r)))
+}
+
+## Restore snapshot $snapshot from $repo. %opts{body} restore options.
+fn Search::snapshot_restore ($repo, $snapshot, %opts) {
+    val $r = Search::_req({ repo => $repo, snapshot => $snapshot, body => $opts{body} }, \%opts)
+    Search::_decode("snapshot_restore", search__snapshot_restore(to_json($r)))
+}
+
+# ── tasks ─────────────────────────────────────────────────────────────
+
+## List running tasks. %opts{params} e.g. { actions => "*reindex", detailed => "true" }.
+fn Search::tasks_list (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("tasks_list", search__tasks_list(to_json($r)))
+}
+
+## Get one task by $task_id (`node:id`).
+fn Search::tasks_get ($task_id, %opts) {
+    val $r = Search::_req({ task_id => $task_id }, \%opts)
+    Search::_decode("tasks_get", search__tasks_get(to_json($r)))
+}
+
+## Cancel a task by $task_id.
+fn Search::tasks_cancel ($task_id, %opts) {
+    val $r = Search::_req({ task_id => $task_id }, \%opts)
+    Search::_decode("tasks_cancel", search__tasks_cancel(to_json($r)))
+}
+
+# ── cluster + nodes ───────────────────────────────────────────────────
+
+## Cluster-wide stats (`GET /_cluster/stats`).
+fn Search::cluster_stats (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("cluster_stats", search__cluster_stats(to_json($r)))
+}
+
+## Cluster state (`GET /_cluster/state`).
+fn Search::cluster_state (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("cluster_state", search__cluster_state(to_json($r)))
+}
+
+## Get cluster settings. %opts{params} e.g. { include_defaults => "true" }.
+fn Search::cluster_settings_get (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("cluster_settings_get", search__cluster_settings_get(to_json($r)))
+}
+
+## Update cluster settings. $body: { persistent => {...}, transient => {...} }.
+fn Search::cluster_settings_put ($body, %opts) {
+    val $r = Search::_req({ body => $body }, \%opts)
+    Search::_decode("cluster_settings_put", search__cluster_settings_put(to_json($r)))
+}
+
+## Node info (`GET /_nodes`).
+fn Search::nodes_info (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("nodes_info", search__nodes_info(to_json($r)))
+}
+
+## Node stats (`GET /_nodes/stats`).
+fn Search::nodes_stats (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("nodes_stats", search__nodes_stats(to_json($r)))
+}
+
+## Pending cluster tasks (`GET /_cluster/pending_tasks`).
+fn Search::pending_tasks (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("pending_tasks", search__pending_tasks(to_json($r)))
+}
+
+## Explain shard allocation. %opts{body} optional (specific shard).
+fn Search::allocation_explain (%opts) {
+    val $r = Search::_req({ body => $opts{body} }, \%opts)
+    Search::_decode("allocation_explain", search__allocation_explain(to_json($r)))
+}
+
+# ── stored scripts + search templates ─────────────────────────────────
+
+## Store a script under $id. $body: { script => { lang, source } }.
+fn Search::script_put ($id, $body, %opts) {
+    val $r = Search::_req({ id => $id, body => $body }, \%opts)
+    Search::_decode("script_put", search__script_put(to_json($r)))
+}
+
+## Get a stored script by $id.
+fn Search::script_get ($id, %opts) {
+    val $r = Search::_req({ id => $id }, \%opts)
+    Search::_decode("script_get", search__script_get(to_json($r)))
+}
+
+## Delete a stored script by $id.
+fn Search::script_delete ($id, %opts) {
+    val $r = Search::_req({ id => $id }, \%opts)
+    Search::_decode("script_delete", search__script_delete(to_json($r)))
+}
+
+## Run a search template. $body: { id|source, params }.
+fn Search::search_template ($index, $body, %opts) {
+    val $r = Search::_req({ index => $index, body => $body }, \%opts)
+    Search::_decode("search_template", search__search_template(to_json($r)))
+}
+
+## Render a search template without running it. $body: { id|source, params }.
+fn Search::render_template ($body, %opts) {
+    val $r = Search::_req({ body => $body }, \%opts)
+    Search::_decode("render_template", search__render_template(to_json($r)))
+}

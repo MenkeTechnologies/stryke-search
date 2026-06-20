@@ -64,27 +64,140 @@ assert_ok exists &Search::escape, "Search::escape exists"
 assert_ok exists &Search::build_url, "Search::build_url exists"
 assert_ok exists &Search::parse_url, "Search::parse_url exists"
 assert_ok exists &Search::redact_url, "Search::redact_url exists"
+# expanded query builders
+assert_ok exists &Search::match_phrase, "Search::match_phrase exists"
+assert_ok exists &Search::match_phrase_prefix, "Search::match_phrase_prefix exists"
+assert_ok exists &Search::prefix, "Search::prefix exists"
+assert_ok exists &Search::wildcard, "Search::wildcard exists"
+assert_ok exists &Search::regexp, "Search::regexp exists"
+assert_ok exists &Search::fuzzy, "Search::fuzzy exists"
+assert_ok exists &Search::exists, "Search::exists exists"
+assert_ok exists &Search::ids, "Search::ids exists"
+assert_ok exists &Search::query_string, "Search::query_string exists"
+assert_ok exists &Search::simple_query_string, "Search::simple_query_string exists"
+assert_ok exists &Search::geo_distance, "Search::geo_distance exists"
+assert_ok exists &Search::nested, "Search::nested exists"
+assert_ok exists &Search::constant_score, "Search::constant_score exists"
+assert_ok exists &Search::dis_max, "Search::dis_max exists"
+# body composer + field helpers
+assert_ok exists &Search::query_body, "Search::query_body exists"
+assert_ok exists &Search::sort, "Search::sort exists"
+assert_ok exists &Search::highlight, "Search::highlight exists"
+# aggregations
+assert_ok exists &Search::agg, "Search::agg exists"
+assert_ok exists &Search::agg_terms, "Search::agg_terms exists"
+assert_ok exists &Search::agg_avg, "Search::agg_avg exists"
+assert_ok exists &Search::agg_sum, "Search::agg_sum exists"
+assert_ok exists &Search::agg_min, "Search::agg_min exists"
+assert_ok exists &Search::agg_max, "Search::agg_max exists"
+assert_ok exists &Search::agg_stats, "Search::agg_stats exists"
+assert_ok exists &Search::agg_extended_stats, "Search::agg_extended_stats exists"
+assert_ok exists &Search::agg_cardinality, "Search::agg_cardinality exists"
+assert_ok exists &Search::agg_value_count, "Search::agg_value_count exists"
+assert_ok exists &Search::agg_percentiles, "Search::agg_percentiles exists"
+assert_ok exists &Search::agg_histogram, "Search::agg_histogram exists"
+assert_ok exists &Search::agg_date_histogram, "Search::agg_date_histogram exists"
+assert_ok exists &Search::agg_range, "Search::agg_range exists"
+assert_ok exists &Search::agg_filter, "Search::agg_filter exists"
+assert_ok exists &Search::agg_missing, "Search::agg_missing exists"
+assert_ok exists &Search::agg_nested, "Search::agg_nested exists"
+assert_ok exists &Search::search_aggs, "Search::search_aggs exists"
+# field caps + term vectors
+assert_ok exists &Search::field_caps, "Search::field_caps exists"
+assert_ok exists &Search::termvectors, "Search::termvectors exists"
+assert_ok exists &Search::mtermvectors, "Search::mtermvectors exists"
+# templates
+assert_ok exists &Search::index_template_put, "Search::index_template_put exists"
+assert_ok exists &Search::index_template_get, "Search::index_template_get exists"
+assert_ok exists &Search::index_template_delete, "Search::index_template_delete exists"
+assert_ok exists &Search::index_template_exists, "Search::index_template_exists exists"
+assert_ok exists &Search::component_template_put, "Search::component_template_put exists"
+assert_ok exists &Search::component_template_get, "Search::component_template_get exists"
+assert_ok exists &Search::component_template_delete, "Search::component_template_delete exists"
+# ingest pipelines
+assert_ok exists &Search::ingest_put, "Search::ingest_put exists"
+assert_ok exists &Search::ingest_get, "Search::ingest_get exists"
+assert_ok exists &Search::ingest_delete, "Search::ingest_delete exists"
+assert_ok exists &Search::ingest_simulate, "Search::ingest_simulate exists"
+# point in time
+assert_ok exists &Search::pit_open, "Search::pit_open exists"
+assert_ok exists &Search::pit_close, "Search::pit_close exists"
+# snapshot + repo
+assert_ok exists &Search::repo_create, "Search::repo_create exists"
+assert_ok exists &Search::repo_get, "Search::repo_get exists"
+assert_ok exists &Search::repo_delete, "Search::repo_delete exists"
+assert_ok exists &Search::snapshot_create, "Search::snapshot_create exists"
+assert_ok exists &Search::snapshot_get, "Search::snapshot_get exists"
+assert_ok exists &Search::snapshot_delete, "Search::snapshot_delete exists"
+assert_ok exists &Search::snapshot_restore, "Search::snapshot_restore exists"
+# tasks
+assert_ok exists &Search::tasks_list, "Search::tasks_list exists"
+assert_ok exists &Search::tasks_get, "Search::tasks_get exists"
+assert_ok exists &Search::tasks_cancel, "Search::tasks_cancel exists"
+# cluster + nodes
+assert_ok exists &Search::cluster_stats, "Search::cluster_stats exists"
+assert_ok exists &Search::cluster_state, "Search::cluster_state exists"
+assert_ok exists &Search::cluster_settings_get, "Search::cluster_settings_get exists"
+assert_ok exists &Search::cluster_settings_put, "Search::cluster_settings_put exists"
+assert_ok exists &Search::nodes_info, "Search::nodes_info exists"
+assert_ok exists &Search::nodes_stats, "Search::nodes_stats exists"
+assert_ok exists &Search::pending_tasks, "Search::pending_tasks exists"
+assert_ok exists &Search::allocation_explain, "Search::allocation_explain exists"
+# stored scripts + search templates
+assert_ok exists &Search::script_put, "Search::script_put exists"
+assert_ok exists &Search::script_get, "Search::script_get exists"
+assert_ok exists &Search::script_delete, "Search::script_delete exists"
+assert_ok exists &Search::search_template, "Search::search_template exists"
+assert_ok exists &Search::render_template, "Search::render_template exists"
 
 # ── version (cdylib loaded) ────────────────────────────────
 assert_ok Search::version(), "Search::version returns truthy (cdylib loaded)"
 
 # ── pure query-DSL builders (no cluster) ───────────────────
+# Builders return BARE clauses (no {query:...} wrapper); search() auto-wraps.
 val $m = Search::match("title", "rust")
-assert_eq $m->{query}{match}{title}, "rust", "match builds match query"
+assert_eq $m->{match}{title}, "rust", "match builds bare match clause"
 
 val $t = Search::term("status", "active")
-assert_eq $t->{query}{term}{status}{value}, "active", "term builds term query"
+assert_eq $t->{term}{status}{value}, "active", "term builds bare term clause"
 
 val $ma = Search::match_all()
-assert_ok exists $ma->{query}{match_all}, "match_all builds match_all"
+assert_ok exists $ma->{match_all}, "match_all builds bare match_all clause"
 
 val $rg = Search::range("age", gte => 18, lt => 65)
-assert_eq $rg->{query}{range}{age}{gte}, 18, "range gte bound"
-assert_eq $rg->{query}{range}{age}{lt}, 65, "range lt bound"
+assert_eq $rg->{range}{age}{gte}, 18, "range gte bound"
+assert_eq $rg->{range}{age}{lt}, 65, "range lt bound"
 
 val $b = Search::bool(must => [Search::match("a", "x")], filter => [Search::term("b", "y")])
-assert_ok exists $b->{query}{bool}{must}, "bool has must clause"
-assert_ok exists $b->{query}{bool}{filter}, "bool has filter clause"
+assert_ok exists $b->{bool}{must}, "bool has must clause"
+assert_ok exists $b->{bool}{filter}, "bool has filter clause"
+
+# new query builders
+assert_eq Search::match_phrase("t", "x y")->{match_phrase}{t}, "x y", "match_phrase"
+assert_eq Search::prefix("f", "ru")->{prefix}{f}{value}, "ru", "prefix"
+assert_eq Search::wildcard("f", "ru*")->{wildcard}{f}{value}, "ru*", "wildcard"
+assert_ok exists Search::exists("f")->{exists}, "exists query"
+assert_eq Search::exists("f")->{exists}{field}, "f", "exists field"
+val $ids = Search::ids(["1", "2"])
+assert_eq scalar(@{ $ids->{ids}{values} }), 2, "ids query has 2 ids"
+assert_eq Search::query_string("foo AND bar")->{query_string}{query}, "foo AND bar", "query_string"
+
+# aggregation builders
+assert_eq Search::agg_terms("category", size => 5)->{terms}{field}, "category", "agg_terms field"
+assert_eq Search::agg_terms("category", size => 5)->{terms}{size}, 5, "agg_terms size"
+assert_eq Search::agg_avg("price")->{avg}{field}, "price", "agg_avg field"
+assert_eq Search::agg_max("price")->{max}{field}, "price", "agg_max field"
+assert_eq Search::agg_date_histogram("ts", calendar_interval => "day")->{date_histogram}{calendar_interval}, "day", "agg_date_histogram"
+
+# full-body composer auto-includes the parts it is given
+val $body = Search::query_body(query => Search::match("t", "x"), size => 10, aggs => { by_cat => Search::agg_terms("cat") })
+assert_ok exists $body->{query}{match}, "query_body keeps query clause"
+assert_eq $body->{size}, 10, "query_body keeps size"
+assert_ok exists $body->{aggs}{by_cat}{terms}, "query_body keeps aggs"
+
+# sort / highlight helpers
+assert_eq Search::sort("ts", order => "desc")->[0]{ts}{order}, "desc", "sort clause order"
+assert_ok exists Search::highlight(["title", "body"])->{fields}{title}, "highlight fields"
 
 # ── escape + url helpers ───────────────────────────────────
 assert_eq Search::escape("a+b"), "a\\+b", "escape escapes +"

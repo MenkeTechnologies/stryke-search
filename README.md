@@ -117,18 +117,29 @@ life of the stryke process, so repeated calls reuse pooled sockets.
 
 ## \[0x04\] API reference
 
+The FFI surface, grouped:
+
 | Group              | Functions                                                                                                   |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Cluster            | `version`, `ping`, `info`, `health`, `cat`, `raw`                                                            |
-| Index admin        | `index_create`, `index_delete`, `index_exists`, `index_list`, `index_refresh`, `index_open`, `index_close`, `index_stats`, `settings_get`, `settings_update`, `mapping_get`, `mapping_put` |
+| Cluster + nodes    | `version`, `ping`, `info`, `health`, `cat`, `raw`, `cluster_stats`, `cluster_state`, `cluster_settings_get`, `cluster_settings_put`, `nodes_info`, `nodes_stats`, `pending_tasks`, `allocation_explain` |
+| Index admin        | `index_create`, `index_delete`, `index_exists`, `index_list`, `index_refresh`, `index_open`, `index_close`, `index_stats`, `settings_get`, `settings_update`, `mapping_get`, `mapping_put`, `field_caps` |
 | Aliases            | `alias_add`, `alias_remove`, `alias_get`                                                                     |
-| Documents          | `doc_index`, `doc_get`, `doc_exists`, `doc_update`, `doc_delete`, `mget`, `bulk`                             |
-| Search             | `search`, `count`, `msearch`, `scroll_start`, `scroll_next`, `scroll_clear`, `delete_by_query`, `update_by_query`, `reindex`, `analyze`, `explain` |
-| Query DSL builders | `match_all`, `match`, `term`, `terms`, `range`, `multi_match`, `bool`, `bulk_ndjson`, `escape`               |
+| Templates          | `index_template_put`, `index_template_get`, `index_template_delete`, `index_template_exists`, `component_template_put`, `component_template_get`, `component_template_delete` |
+| Documents          | `doc_index`, `doc_get`, `doc_exists`, `doc_update`, `doc_delete`, `mget`, `bulk`, `termvectors`, `mtermvectors` |
+| Search             | `search`, `count`, `msearch`, `search_aggs`, `scroll_start`, `scroll_next`, `scroll_clear`, `delete_by_query`, `update_by_query`, `reindex`, `analyze`, `explain`, `pit_open`, `pit_close` |
+| Query DSL builders | `match_all`, `match`, `match_phrase`, `match_phrase_prefix`, `term`, `terms`, `range`, `prefix`, `wildcard`, `regexp`, `fuzzy`, `exists`, `ids`, `query_string`, `simple_query_string`, `multi_match`, `geo_distance`, `nested`, `constant_score`, `dis_max`, `bool` |
+| Body + fields      | `query_body`, `sort`, `highlight`, `bulk_ndjson`, `escape`                                                   |
+| Aggregations       | `agg`, `agg_terms`, `agg_avg`, `agg_sum`, `agg_min`, `agg_max`, `agg_stats`, `agg_extended_stats`, `agg_cardinality`, `agg_value_count`, `agg_percentiles`, `agg_histogram`, `agg_date_histogram`, `agg_range`, `agg_filter`, `agg_missing`, `agg_nested` |
+| Ingest pipelines   | `ingest_put`, `ingest_get`, `ingest_delete`, `ingest_simulate`                                               |
+| Snapshot + repo    | `repo_create`, `repo_get`, `repo_delete`, `snapshot_create`, `snapshot_get`, `snapshot_delete`, `snapshot_restore` |
+| Tasks              | `tasks_list`, `tasks_get`, `tasks_cancel`                                                                    |
+| Stored scripts     | `script_put`, `script_get`, `script_delete`, `search_template`, `render_template`                           |
 | URL helpers        | `build_url`, `parse_url`, `redact_url`                                                                       |
 
-Query bodies passed to `search` / `count` are the full Elasticsearch query DSL
-(a hashref or JSON). The builders return ready-to-use bodies:
+Query builders return **bare clauses** (e.g. `{"match":{…}}`), so they nest
+directly inside `bool` / `nested` / `constant_score`. `Search::search` and
+`::count` auto-wrap a top-level clause as `{"query": clause}`; pass a full body
+(built with `Search::query_body`) when you need `aggs` / `sort` / `size`.
 
 ```perl
 # bool query: must match title, filter by year range
@@ -137,6 +148,22 @@ val $q = Search::bool(
     filter => [ Search::range("year", gte => 2018) ],
 )
 val $hits = Search::search("books", $q, %conn)
+
+# aggregations: average price bucketed by category
+val $res = Search::search_aggs(
+    "products",
+    { by_cat => Search::agg_terms("category", size => 10) },
+    %conn,
+)
+p $res->{aggregations}{by_cat}{buckets}
+
+# full body with query + sort + size
+val $body = Search::query_body(
+    query => Search::match("title", "rust"),
+    sort  => Search::sort("year", order => "desc"),
+    size  => 20,
+)
+val $page = Search::search("books", $body, %conn)
 ```
 
 Bulk ops are an array of op hashes; the cdylib serializes the NDJSON body:

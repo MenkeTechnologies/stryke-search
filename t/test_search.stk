@@ -15,7 +15,7 @@ val $version = Search::version()
 assert_ok $version, "Search::version returns truthy (cdylib loaded)"
 
 # ── connection-free DSL builders ────────────────────────────────────
-assert_eq Search::match("f", "v")->{query}{match}{f}, "v", "match builder"
+assert_eq Search::match("f", "v")->{match}{f}, "v", "match builder (bare clause)"
 assert_eq Search::escape("a:b"), "a\\:b", "escape colon"
 
 # ── liveness probe ──────────────────────────────────────────────────
@@ -74,7 +74,15 @@ if ($alive) {
     val $after = Search::doc_get($idx, "1", %conn)
     assert_eq $after->{_source}{year}, 2020, "doc_update applied"
 
-    # 9. delete one document
+    # 9. aggregation: avg year across all docs
+    val $agg = Search::search_aggs($idx, { avg_year => Search::agg_avg("year") }, %conn)
+    assert_ok exists $agg->{aggregations}{avg_year}{value}, "search_aggs returns avg_year"
+
+    # 10. terms aggregation buckets by year
+    val $byyear = Search::search_aggs($idx, { years => Search::agg_terms("year") }, %conn)
+    assert_ok exists $byyear->{aggregations}{years}{buckets}, "terms agg returns buckets"
+
+    # 11. delete one document
     Search::doc_delete($idx, "3", %conn)
     Search::index_refresh(index => $idx, %conn)
     assert_eq Search::doc_exists($idx, "3", %conn), 0, "doc deleted"
