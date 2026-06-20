@@ -1,0 +1,72 @@
+[package]
+name = "stryke-search"
+version = "0.1.0"
+description = "Elasticsearch / OpenSearch client for stryke. cdylib loaded in-process — persistent ureq Agent (HTTP keep-alive pool) cached per (base_url, auth)."
+authors = ["MenkeTechnologies"]
+license = "MIT"
+repository = "https://github.com/MenkeTechnologies/stryke-search"
+edition = "2026"
+
+[ffi]
+lib-name = "stryke_search"
+namespace = "Search"
+exports = [
+    "search__version",
+    "search__ping",
+    "search__info",
+    "search__health",
+    "search__index_create",
+    "search__index_delete",
+    "search__index_exists",
+    "search__index_list",
+    "search__index_refresh",
+    "search__index_open",
+    "search__index_close",
+    "search__index_stats",
+    "search__settings_get",
+    "search__settings_update",
+    "search__mapping_get",
+    "search__mapping_put",
+    "search__alias_add",
+    "search__alias_remove",
+    "search__alias_get",
+    "search__doc_index",
+    "search__doc_get",
+    "search__doc_exists",
+    "search__doc_update",
+    "search__doc_delete",
+    "search__mget",
+    "search__bulk",
+    "search__search",
+    "search__count",
+    "search__msearch",
+    "search__scroll_start",
+    "search__scroll_next",
+    "search__scroll_clear",
+    "search__delete_by_query",
+    "search__update_by_query",
+    "search__reindex",
+    "search__analyze",
+    "search__explain",
+    "search__cat",
+    "search__raw",
+    "search__match_all",
+    "search__match_query",
+    "search__term_query",
+    "search__terms_query",
+    "search__range_query",
+    "search__multi_match",
+    "search__bool_query",
+    "search__bulk_ndjson",
+    "search__escape_query_string",
+    "search__build_url",
+    "search__parse_url",
+    "search__redact_url",
+]
+
+[scripts]
+build = "cargo build --release"
+build-debug = "cargo build"
+clean = "cargo clean"
+test = "s test t/"
+install = "s pkg install -g ."

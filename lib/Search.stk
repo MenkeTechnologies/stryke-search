@@ -1,0 +1,394 @@
+## lib/Search.stk — Elasticsearch / OpenSearch client for stryke (`use Search`).
+##
+## Thin wrapper around the `stryke-search` cdylib's `search__*` exports. The
+## cdylib is dlopened in-process on first `use Search` (see stryke's
+## `pkg/commands.rs::try_load_ffi_for`) and registers each export as a
+## stryke-callable function via `rust_ffi::load_cdylib`. Every wrapper here
+## builds a JSON args dict, calls the FFI symbol, and parses the JSON return.
+##
+## Transport is the cluster REST API over a cached `ureq::Agent` (HTTP
+## keep-alive connection pool) keyed by `(base_url, auth)` for the life of
+## the stryke process. Both Elasticsearch and OpenSearch speak the same
+## endpoints, so one client covers both. Network ops return the cluster's
+## JSON verbatim; the pure query-DSL builders (`Search::match`,
+## `Search::bool`, `Search::escape`, …) take no connection.
+
+package Search
+
+# ── error dispatch ────────────────────────────────────────────────────
+
+## Decode the JSON returned by a `search__*` FFI call. Dies with a
+## descriptive message when the cdylib reported an error.
+fn Search::_decode ($name, $json) {
+    val $o = from_json $json
+    if (ref $o eq "HASH" && exists $o->{error}) {
+        die "Search::$name: $o->{error}"
+    }
+    $o
+}
+
+## Build the request hash: connection params from %opts plus the per-op
+## fields the caller supplies. Filters out undef values so the cdylib
+## applies its own defaults. Falls back to $SEARCH_URL when neither
+## `url` nor `host` is supplied.
+fn Search::_req ($extra, $opts) {
+    var %r = %$extra
+    for val $k (qw(url host port username password api_key tls params)) {
+        $r{$k} = $opts->{$k} if exists $opts->{$k} && defined $opts->{$k}
+    }
+    if (!exists $r{url} && !exists $r{host} && defined $ENV{SEARCH_URL}) {
+        $r{url} = $ENV{SEARCH_URL}
+    }
+    \%r
+}
+
+# ── version + liveness ────────────────────────────────────────────────
+
+## Return the package version string.
+fn Search::version {
+    val $o = Search::_decode("version", search__version("{}"))
+    $o->{version}
+}
+
+## Connectivity probe — returns 1 when the cluster answers `GET /`, else 0.
+fn Search::ping (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("ping", search__ping(to_json($r)))->{value}
+}
+
+## Cluster info (`GET /`) — name, version, lucene_version, etc.
+fn Search::info (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("info", search__info(to_json($r)))
+}
+
+## Cluster health (`GET /_cluster/health`). %opts{params} forwards e.g.
+## { wait_for_status => "yellow", timeout => "5s" }.
+fn Search::health (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("health", search__health(to_json($r)))
+}
+
+# ── index admin ───────────────────────────────────────────────────────
+
+## Create $index. %opts{body} may carry settings/mappings (hashref or JSON).
+fn Search::index_create ($index, %opts) {
+    val $r = Search::_req({ index => $index, body => $opts{body} }, \%opts)
+    Search::_decode("index_create", search__index_create(to_json($r)))
+}
+
+## Delete $index.
+fn Search::index_delete ($index, %opts) {
+    val $r = Search::_req({ index => $index }, \%opts)
+    Search::_decode("index_delete", search__index_delete(to_json($r)))
+}
+
+## True when $index exists (HEAD /$index).
+fn Search::index_exists ($index, %opts) {
+    val $r = Search::_req({ index => $index }, \%opts)
+    Search::_decode("index_exists", search__index_exists(to_json($r)))->{value}
+}
+
+## `GET /_cat/indices?format=json` — array of index summaries.
+fn Search::index_list (%opts) {
+    val $r = Search::_req({}, \%opts)
+    @{ Search::_decode("index_list", search__index_list(to_json($r))) }
+}
+
+## Refresh $index (default `_all`) so just-written docs become searchable.
+fn Search::index_refresh (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("index_refresh", search__index_refresh(to_json($r)))
+}
+
+## Open a closed index.
+fn Search::index_open ($index, %opts) {
+    val $r = Search::_req({ index => $index }, \%opts)
+    Search::_decode("index_open", search__index_open(to_json($r)))
+}
+
+## Close an open index.
+fn Search::index_close ($index, %opts) {
+    val $r = Search::_req({ index => $index }, \%opts)
+    Search::_decode("index_close", search__index_close(to_json($r)))
+}
+
+## Index stats (`GET /$index/_stats`, default `_all`).
+fn Search::index_stats (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("index_stats", search__index_stats(to_json($r)))
+}
+
+## Get index settings (default `_all`).
+fn Search::settings_get (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("settings_get", search__settings_get(to_json($r)))
+}
+
+## Update dynamic settings on $index. $body: hashref or JSON.
+fn Search::settings_update ($index, $body, %opts) {
+    val $r = Search::_req({ index => $index, body => $body }, \%opts)
+    Search::_decode("settings_update", search__settings_update(to_json($r)))
+}
+
+## Get mappings (default `_all`).
+fn Search::mapping_get (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("mapping_get", search__mapping_get(to_json($r)))
+}
+
+## Put/extend mappings on $index. $body: hashref or JSON.
+fn Search::mapping_put ($index, $body, %opts) {
+    val $r = Search::_req({ index => $index, body => $body }, \%opts)
+    Search::_decode("mapping_put", search__mapping_put(to_json($r)))
+}
+
+# ── aliases ───────────────────────────────────────────────────────────
+
+## Point $alias at $index.
+fn Search::alias_add ($index, $alias, %opts) {
+    val $r = Search::_req({ index => $index, alias => $alias }, \%opts)
+    Search::_decode("alias_add", search__alias_add(to_json($r)))
+}
+
+## Remove $alias from $index.
+fn Search::alias_remove ($index, $alias, %opts) {
+    val $r = Search::_req({ index => $index, alias => $alias }, \%opts)
+    Search::_decode("alias_remove", search__alias_remove(to_json($r)))
+}
+
+## Get aliases for $index (default `_all`).
+fn Search::alias_get (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("alias_get", search__alias_get(to_json($r)))
+}
+
+# ── documents ─────────────────────────────────────────────────────────
+
+## Index a document into $index. With `id => "..."` does a PUT to that id
+## (upsert); without, POSTs and the cluster assigns the id. $document is a
+## hashref or JSON. Pass `params => { refresh => "true" }` to make it
+## immediately searchable.
+fn Search::doc_index ($index, $document, %opts) {
+    val $r = Search::_req(
+        { index => $index, document => $document, id => $opts{id} },
+        \%opts
+    )
+    Search::_decode("doc_index", search__doc_index(to_json($r)))
+}
+
+## Fetch one document by id (`GET /$index/_doc/$id`).
+fn Search::doc_get ($index, $id, %opts) {
+    val $r = Search::_req({ index => $index, id => $id }, \%opts)
+    Search::_decode("doc_get", search__doc_get(to_json($r)))
+}
+
+## True when the document exists (HEAD /$index/_doc/$id).
+fn Search::doc_exists ($index, $id, %opts) {
+    val $r = Search::_req({ index => $index, id => $id }, \%opts)
+    Search::_decode("doc_exists", search__doc_exists(to_json($r)))->{value}
+}
+
+## Partial-update a document. $body is `{ doc => {...} }` or a full update
+## request (script, upsert) as a hashref or JSON.
+fn Search::doc_update ($index, $id, $body, %opts) {
+    val $r = Search::_req({ index => $index, id => $id, body => $body }, \%opts)
+    Search::_decode("doc_update", search__doc_update(to_json($r)))
+}
+
+## Delete a document by id.
+fn Search::doc_delete ($index, $id, %opts) {
+    val $r = Search::_req({ index => $index, id => $id }, \%opts)
+    Search::_decode("doc_delete", search__doc_delete(to_json($r)))
+}
+
+## Multi-get by ids (`POST /$index/_mget`). $ids: arrayref.
+fn Search::mget ($index, $ids, %opts) {
+    val $list = ref($ids) eq "ARRAY" ? $ids : [$ids]
+    val $r = Search::_req({ index => $index, ids => $list }, \%opts)
+    Search::_decode("mget", search__mget(to_json($r)))
+}
+
+## Bulk op (`POST /_bulk`). $ops: arrayref of op hashrefs, each
+## { action => "index"|"create"|"update"|"delete", index?, id?, document?,
+## doc? }. The cdylib serializes the NDJSON body.
+fn Search::bulk ($ops, %opts) {
+    val $r = Search::_req({ index => $opts{index}, ops => $ops }, \%opts)
+    Search::_decode("bulk", search__bulk(to_json($r)))
+}
+
+# ── search ────────────────────────────────────────────────────────────
+
+## Run a search (`POST /$index/_search`, default `_all`). $query is a full
+## query body (hashref or JSON), e.g. one built by Search::match / ::bool.
+## %opts{params} forwards URL params like { size => 20, from => 40 }.
+fn Search::search ($index, $query, %opts) {
+    val $r = Search::_req({ index => $index, query => $query }, \%opts)
+    Search::_decode("search", search__search(to_json($r)))
+}
+
+## Count matching documents (`POST /$index/_count`).
+fn Search::count ($index, $query, %opts) {
+    val $r = Search::_req({ index => $index, query => $query }, \%opts)
+    Search::_decode("count", search__count(to_json($r)))
+}
+
+## Multi-search (`POST /_msearch`). $searches: arrayref of
+## { header => {...}, body => {...} } pairs.
+fn Search::msearch ($searches, %opts) {
+    val $r = Search::_req({ searches => $searches }, \%opts)
+    Search::_decode("msearch", search__msearch(to_json($r)))
+}
+
+## Begin a scroll. Returns the first page plus a `_scroll_id` to pass to
+## Search::scroll_next. %opts{scroll} sets the keep-alive (default "1m").
+fn Search::scroll_start ($index, $query, %opts) {
+    val $r = Search::_req(
+        { index => $index, query => $query, scroll => $opts{scroll} },
+        \%opts
+    )
+    Search::_decode("scroll_start", search__scroll_start(to_json($r)))
+}
+
+## Fetch the next scroll page for $scroll_id.
+fn Search::scroll_next ($scroll_id, %opts) {
+    val $r = Search::_req(
+        { scroll_id => $scroll_id, scroll => $opts{scroll} },
+        \%opts
+    )
+    Search::_decode("scroll_next", search__scroll_next(to_json($r)))
+}
+
+## Release a scroll context.
+fn Search::scroll_clear ($scroll_id, %opts) {
+    val $r = Search::_req({ scroll_id => $scroll_id }, \%opts)
+    Search::_decode("scroll_clear", search__scroll_clear(to_json($r)))
+}
+
+## Delete documents matching $query (`POST /$index/_delete_by_query`).
+fn Search::delete_by_query ($index, $query, %opts) {
+    val $r = Search::_req({ index => $index, query => $query }, \%opts)
+    Search::_decode("delete_by_query", search__delete_by_query(to_json($r)))
+}
+
+## Update documents matching a query/script (`POST /$index/_update_by_query`).
+## %opts{body} carries the optional script/query body.
+fn Search::update_by_query ($index, %opts) {
+    val $r = Search::_req({ index => $index, body => $opts{body} }, \%opts)
+    Search::_decode("update_by_query", search__update_by_query(to_json($r)))
+}
+
+## Reindex $source into $dest (`POST /_reindex`).
+fn Search::reindex ($source, $dest, %opts) {
+    val $r = Search::_req({ source => $source, dest => $dest }, \%opts)
+    Search::_decode("reindex", search__reindex(to_json($r)))
+}
+
+## Run the analyze API (`POST /_analyze` or `/$index/_analyze`). $body:
+## { analyzer => "standard", text => "..." } as hashref or JSON.
+fn Search::analyze ($body, %opts) {
+    val $r = Search::_req({ index => $opts{index}, body => $body }, \%opts)
+    Search::_decode("analyze", search__analyze(to_json($r)))
+}
+
+## Explain why a document matches (or not) a query.
+fn Search::explain ($index, $id, $query, %opts) {
+    val $r = Search::_req({ index => $index, id => $id, query => $query }, \%opts)
+    Search::_decode("explain", search__explain(to_json($r)))
+}
+
+## `GET /_cat/$what?format=json` — array of rows. $what e.g. "nodes",
+## "shards", "health", "aliases".
+fn Search::cat ($what, %opts) {
+    val $r = Search::_req({ what => $what }, \%opts)
+    @{ Search::_decode("cat", search__cat(to_json($r))) }
+}
+
+## Escape hatch: arbitrary request. %opts{method} (default GET), $path,
+## %opts{body} (hashref/JSON/string).
+fn Search::raw ($path, %opts) {
+    val $r = Search::_req(
+        { path => $path, method => $opts{method}, body => $opts{body} },
+        \%opts
+    )
+    Search::_decode("raw", search__raw(to_json($r)))
+}
+
+# ── pure query-DSL builders (no connection) ───────────────────────────
+
+## { query => { match_all => {} } }
+fn Search::match_all {
+    Search::_decode("match_all", search__match_all("{}"))->{value}
+}
+
+## Full-text match on $field for $value.
+fn Search::match ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("match", search__match_query(to_json($r)))->{value}
+}
+
+## Exact-term match on $field for $value.
+fn Search::term ($field, $value) {
+    val $r = { field => $field, value => $value }
+    Search::_decode("term", search__term_query(to_json($r)))->{value}
+}
+
+## Match any of $values (arrayref) on $field.
+fn Search::terms ($field, $values) {
+    val $list = ref($values) eq "ARRAY" ? $values : [$values]
+    val $r = { field => $field, values => $list }
+    Search::_decode("terms", search__terms_query(to_json($r)))->{value}
+}
+
+## Range on $field. %bounds: any of gt, gte, lt, lte, format, time_zone.
+fn Search::range ($field, %bounds) {
+    var %r = %bounds
+    $r{field} = $field
+    Search::_decode("range", search__range_query(to_json(\%r)))->{value}
+}
+
+## multi_match $query across $fields (arrayref). %opts{type} optional.
+fn Search::multi_match ($query, $fields, %opts) {
+    val $list = ref($fields) eq "ARRAY" ? $fields : [$fields]
+    val $r = { query => $query, fields => $list, type => $opts{type} }
+    Search::_decode("multi_match", search__multi_match(to_json($r)))->{value}
+}
+
+## Compose a bool query. %clauses: any of must, should, must_not, filter
+## (each a single query or arrayref of queries) and minimum_should_match.
+fn Search::bool (%clauses) {
+    Search::_decode("bool", search__bool_query(to_json(\%clauses)))->{value}
+}
+
+## Serialize $ops (arrayref of bulk op hashrefs) into an NDJSON `_bulk` body
+## without sending it — useful for inspection or batching.
+fn Search::bulk_ndjson ($ops) {
+    val $r = { ops => $ops }
+    Search::_decode("bulk_ndjson", search__bulk_ndjson(to_json($r)))->{value}
+}
+
+## Backslash-escape the Lucene query-string special characters in $value.
+fn Search::escape ($value) {
+    val $r = { value => $value }
+    Search::_decode("escape", search__escape_query_string(to_json($r)))->{value}
+}
+
+# ── URL helpers ───────────────────────────────────────────────────────
+
+## Resolve the base URL these opts would connect to.
+fn Search::build_url (%opts) {
+    val $r = Search::_req({}, \%opts)
+    Search::_decode("build_url", search__build_url(to_json($r)))->{value}
+}
+
+## Decompose $url into scheme/host/port/username/password/path/tls.
+fn Search::parse_url ($url) {
+    val $r = { url => $url }
+    Search::_decode("parse_url", search__parse_url(to_json($r)))
+}
+
+## Replace userinfo in $url with *** for safe logging.
+fn Search::redact_url ($url) {
+    val $r = { url => $url }
+    Search::_decode("redact_url", search__redact_url(to_json($r)))->{value}
+}

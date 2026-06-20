@@ -1,0 +1,108 @@
+## t/test_stryke_search_surface.stk — wrapper-completeness + pure-builder pin.
+##
+## Asserts every public `fn Search::name` declared in lib/Search.stk is
+## reachable via `use` at runtime (`exists &Search::name` probes the symbol
+## table without invoking the sub), then exercises the connection-free
+## query-DSL builders for correct shape.
+##
+## Permission-free — no cluster, no creds. These asserts run anywhere, so CI
+## without an Elasticsearch/OpenSearch container still validates the surface
+## and the builder logic. Private helpers (`_` prefix) are implementation
+## detail and are NOT asserted.
+
+use Search
+
+# ── wrapper surface ────────────────────────────────────────
+assert_ok exists &Search::version, "Search::version exists"
+assert_ok exists &Search::ping, "Search::ping exists"
+assert_ok exists &Search::info, "Search::info exists"
+assert_ok exists &Search::health, "Search::health exists"
+assert_ok exists &Search::index_create, "Search::index_create exists"
+assert_ok exists &Search::index_delete, "Search::index_delete exists"
+assert_ok exists &Search::index_exists, "Search::index_exists exists"
+assert_ok exists &Search::index_list, "Search::index_list exists"
+assert_ok exists &Search::index_refresh, "Search::index_refresh exists"
+assert_ok exists &Search::index_open, "Search::index_open exists"
+assert_ok exists &Search::index_close, "Search::index_close exists"
+assert_ok exists &Search::index_stats, "Search::index_stats exists"
+assert_ok exists &Search::settings_get, "Search::settings_get exists"
+assert_ok exists &Search::settings_update, "Search::settings_update exists"
+assert_ok exists &Search::mapping_get, "Search::mapping_get exists"
+assert_ok exists &Search::mapping_put, "Search::mapping_put exists"
+assert_ok exists &Search::alias_add, "Search::alias_add exists"
+assert_ok exists &Search::alias_remove, "Search::alias_remove exists"
+assert_ok exists &Search::alias_get, "Search::alias_get exists"
+assert_ok exists &Search::doc_index, "Search::doc_index exists"
+assert_ok exists &Search::doc_get, "Search::doc_get exists"
+assert_ok exists &Search::doc_exists, "Search::doc_exists exists"
+assert_ok exists &Search::doc_update, "Search::doc_update exists"
+assert_ok exists &Search::doc_delete, "Search::doc_delete exists"
+assert_ok exists &Search::mget, "Search::mget exists"
+assert_ok exists &Search::bulk, "Search::bulk exists"
+assert_ok exists &Search::search, "Search::search exists"
+assert_ok exists &Search::count, "Search::count exists"
+assert_ok exists &Search::msearch, "Search::msearch exists"
+assert_ok exists &Search::scroll_start, "Search::scroll_start exists"
+assert_ok exists &Search::scroll_next, "Search::scroll_next exists"
+assert_ok exists &Search::scroll_clear, "Search::scroll_clear exists"
+assert_ok exists &Search::delete_by_query, "Search::delete_by_query exists"
+assert_ok exists &Search::update_by_query, "Search::update_by_query exists"
+assert_ok exists &Search::reindex, "Search::reindex exists"
+assert_ok exists &Search::analyze, "Search::analyze exists"
+assert_ok exists &Search::explain, "Search::explain exists"
+assert_ok exists &Search::cat, "Search::cat exists"
+assert_ok exists &Search::raw, "Search::raw exists"
+assert_ok exists &Search::match_all, "Search::match_all exists"
+assert_ok exists &Search::match, "Search::match exists"
+assert_ok exists &Search::term, "Search::term exists"
+assert_ok exists &Search::terms, "Search::terms exists"
+assert_ok exists &Search::range, "Search::range exists"
+assert_ok exists &Search::multi_match, "Search::multi_match exists"
+assert_ok exists &Search::bool, "Search::bool exists"
+assert_ok exists &Search::bulk_ndjson, "Search::bulk_ndjson exists"
+assert_ok exists &Search::escape, "Search::escape exists"
+assert_ok exists &Search::build_url, "Search::build_url exists"
+assert_ok exists &Search::parse_url, "Search::parse_url exists"
+assert_ok exists &Search::redact_url, "Search::redact_url exists"
+
+# ── version (cdylib loaded) ────────────────────────────────
+assert_ok Search::version(), "Search::version returns truthy (cdylib loaded)"
+
+# ── pure query-DSL builders (no cluster) ───────────────────
+val $m = Search::match("title", "rust")
+assert_eq $m->{query}{match}{title}, "rust", "match builds match query"
+
+val $t = Search::term("status", "active")
+assert_eq $t->{query}{term}{status}{value}, "active", "term builds term query"
+
+val $ma = Search::match_all()
+assert_ok exists $ma->{query}{match_all}, "match_all builds match_all"
+
+val $rg = Search::range("age", gte => 18, lt => 65)
+assert_eq $rg->{query}{range}{age}{gte}, 18, "range gte bound"
+assert_eq $rg->{query}{range}{age}{lt}, 65, "range lt bound"
+
+val $b = Search::bool(must => [Search::match("a", "x")], filter => [Search::term("b", "y")])
+assert_ok exists $b->{query}{bool}{must}, "bool has must clause"
+assert_ok exists $b->{query}{bool}{filter}, "bool has filter clause"
+
+# ── escape + url helpers ───────────────────────────────────
+assert_eq Search::escape("a+b"), "a\\+b", "escape escapes +"
+assert_eq Search::escape("plain"), "plain", "escape leaves plain text"
+assert_eq Search::redact_url("https://u:p\@h:9200"), "https://***\@h:9200", "redact strips userinfo"
+assert_eq Search::build_url(host => "h", port => 9200), "http://h:9200", "build_url from parts"
+
+val $pu = Search::parse_url("https://es.example.com:9243/prefix")
+assert_eq $pu->{host}, "es.example.com", "parse_url host"
+assert_eq $pu->{port}, 9243, "parse_url port"
+assert_eq $pu->{scheme}, "https", "parse_url scheme"
+
+# ── bulk NDJSON serialization (no cluster) ─────────────────
+val $nd = Search::bulk_ndjson([
+    { action => "index", index => "books", id => "1", document => { title => "a" } },
+    { action => "delete", index => "books", id => "2" },
+])
+assert_ok index($nd, "\"_index\":\"books\"") >= 0, "bulk_ndjson emits index meta"
+assert_ok index($nd, "\"delete\"") >= 0, "bulk_ndjson emits delete action"
+
+test_run

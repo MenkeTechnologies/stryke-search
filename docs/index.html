@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="stryke-search — Elasticsearch / OpenSearch client for stryke. Index admin, document CRUD, bulk, query DSL builders, scroll, aliases, cluster health. Opt-in package — ships as a Rust cdylib that stryke dlopens in-process on first `use Search`.">
+  <title>stryke-search — Documentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&amp;family=Share+Tech+Mono&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="hud-static.css">
+  <link rel="stylesheet" href="tutorial.css">
+  <style>
+    .tutorial-main { max-width: 68rem; }
+    .example-tbl { width: 100%; border-collapse: collapse; margin: 0.6rem 0; font-size: 12.5px; }
+    .example-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .example-tbl td:first-child { white-space: nowrap; color: var(--accent); font-family: 'Share Tech Mono', ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <div class="tutorial-wrap">
+    <header class="tutorial-header">
+      <div class="tutorial-header-inner">
+        <h1 class="tutorial-brand">// STRYKE-SEARCH &mdash; ELASTICSEARCH / OPENSEARCH CLIENT FOR STRYKE</h1>
+        <nav class="tutorial-nav">
+          <a href="report.html">Engineering report</a>
+          <a href="https://github.com/MenkeTechnologies/stryke-search" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/MenkeTechnologies/strykelang" target="_blank" rel="noopener noreferrer">strykelang</a>
+          <a href="https://github.com/MenkeTechnologies/MenkeTechnologiesMeta" target="_blank" rel="noopener noreferrer">Meta</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="tutorial-main">
+      <section>
+        <h2>What it is</h2>
+        <p>
+          <code>stryke-search</code> is an Elasticsearch / OpenSearch client for
+          <a href="https://github.com/MenkeTechnologies/strykelang" target="_blank" rel="noopener noreferrer">stryke</a>.
+          Both engines speak the same REST API, so one client covers both. It
+          ships as a Rust <code>cdylib</code> that stryke dlopens in-process on
+          the first <code>use Search</code>; a <code>ureq</code> HTTP keep-alive
+          connection pool is cached per <code>(base_url, auth)</code> for the life
+          of the process. No tokio, no OpenSSL — pure-Rust transport over rustls.
+        </p>
+      </section>
+
+      <section>
+        <h2>Install</h2>
+        <pre><code>s add github.com/MenkeTechnologies/stryke-search</code></pre>
+        <p>Then <code>use Search</code> in any stryke script.</p>
+      </section>
+
+      <section>
+        <h2>Quick start</h2>
+        <pre><code>use Search
+
+var %conn
+$conn{url} = "http://127.0.0.1:9200"
+
+Search::index_create("books", body =&gt; { mappings =&gt; { properties =&gt; { title =&gt; { type =&gt; "text" } } } }, %conn)
+Search::doc_index("books", { title =&gt; "rust in action" }, id =&gt; "1", %conn)
+Search::index_refresh(index =&gt; "books", %conn)
+
+val $hits = Search::search("books", Search::match("title", "rust"), %conn)
+p $hits-&gt;{hits}{total}{value}</code></pre>
+      </section>
+
+      <section>
+        <h2>API surface</h2>
+        <table class="example-tbl">
+          <tr><td>Cluster</td><td>ping, info, health, cat, raw</td></tr>
+          <tr><td>Index admin</td><td>index_create, index_delete, index_exists, index_list, index_refresh, index_open, index_close, index_stats, settings_get, settings_update, mapping_get, mapping_put</td></tr>
+          <tr><td>Aliases</td><td>alias_add, alias_remove, alias_get</td></tr>
+          <tr><td>Documents</td><td>doc_index, doc_get, doc_exists, doc_update, doc_delete, mget, bulk</td></tr>
+          <tr><td>Search</td><td>search, count, msearch, scroll_start, scroll_next, scroll_clear, delete_by_query, update_by_query, reindex, analyze, explain</td></tr>
+          <tr><td>Query DSL builders</td><td>match_all, match, term, terms, range, multi_match, bool, bulk_ndjson, escape</td></tr>
+          <tr><td>URL helpers</td><td>build_url, parse_url, redact_url</td></tr>
+        </table>
+        <p>The full API lives in the <a href="https://github.com/MenkeTechnologies/stryke-search#readme">README</a>.</p>
+      </section>
+
+      <section>
+        <h2>Package family</h2>
+        <p>Part of the stryke connector family under the <a href="https://github.com/MenkeTechnologies/MenkeTechnologiesMeta" target="_blank" rel="noopener noreferrer">MenkeTechnologiesMeta</a> umbrella:</p>
+        <ul>
+          <li><a href="https://github.com/MenkeTechnologies/stryke-mongo" target="_blank" rel="noopener noreferrer">stryke-mongo</a> — MongoDB</li>
+          <li><a href="https://github.com/MenkeTechnologies/stryke-postgres" target="_blank" rel="noopener noreferrer">stryke-postgres</a> — PostgreSQL</li>
+          <li><a href="https://github.com/MenkeTechnologies/stryke-redis" target="_blank" rel="noopener noreferrer">stryke-redis</a> — Redis / Valkey</li>
+          <li><a href="https://github.com/MenkeTechnologies/stryke-duckdb" target="_blank" rel="noopener noreferrer">stryke-duckdb</a> — embedded DuckDB</li>
+          <li><a href="https://github.com/MenkeTechnologies/stryke-kafka" target="_blank" rel="noopener noreferrer">stryke-kafka</a> — Apache Kafka</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="tutorial-footer">
+      <p>MIT &middot; MenkeTechnologies</p>
+    </footer>
+  </div>
+  <script src="hud-theme.js"></script>
+</body>
+</html>

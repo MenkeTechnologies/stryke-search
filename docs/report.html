@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="stryke-search engineering report — architecture of the Elasticsearch / OpenSearch cdylib: in-process dlopen, cached ureq Agent pool, JSON-in/JSON-out FFI contract, pure query-DSL builders.">
+  <title>stryke-search — Engineering report</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&amp;family=Share+Tech+Mono&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="hud-static.css">
+  <link rel="stylesheet" href="tutorial.css">
+  <style>
+    .tutorial-main { max-width: 68rem; }
+  </style>
+</head>
+<body>
+  <div class="tutorial-wrap">
+    <header class="tutorial-header">
+      <div class="tutorial-header-inner">
+        <h1 class="tutorial-brand">// STRYKE-SEARCH &mdash; ENGINEERING REPORT</h1>
+        <nav class="tutorial-nav">
+          <a href="index.html">Documentation</a>
+          <a href="https://github.com/MenkeTechnologies/stryke-search" target="_blank" rel="noopener noreferrer">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="tutorial-main">
+      <section>
+        <h2>Transport</h2>
+        <p>
+          The client talks to the cluster over its REST API using
+          <code>ureq</code> — a synchronous, pure-Rust HTTP client backed by
+          rustls. There is no async runtime and no OpenSSL, which keeps the
+          dependency tree vendorable and the build reproducible. Elasticsearch
+          and OpenSearch expose the same <code>_search</code>, <code>_bulk</code>,
+          <code>_doc</code>, <code>_cat</code>, and <code>_cluster</code>
+          endpoints, so a single client covers both without version-locked SDK
+          types.
+        </p>
+      </section>
+
+      <section>
+        <h2>Connection cache</h2>
+        <p>
+          A <code>ureq::Agent</code> owns an HTTP keep-alive connection pool. One
+          <code>Agent</code> is cached per <code>(base_url, auth)</code> tuple in a
+          <code>OnceCell&lt;Mutex&lt;HashMap&gt;&gt;</code> for the life of the
+          stryke process, so repeated <code>Search::*</code> calls reuse pooled
+          sockets instead of reconnecting. Auth precedence is <code>api_key</code>
+          (sent as <code>ApiKey &lt;key&gt;</code>) over <code>username</code> +
+          <code>password</code> (HTTP Basic), resolved once when the key is built.
+        </p>
+      </section>
+
+      <section>
+        <h2>FFI contract</h2>
+        <p>
+          Each <code>#[no_mangle] extern "C" fn search__*</code> is a
+          JSON-string-in / JSON-string-out wrapper. stryke's FFI bridge resolves
+          the symbols at first <code>use Search</code>, passes a JSON-encoded args
+          dict on each call, and copies the returned JSON into a stryke string;
+          <code>stryke_free_cstring</code> frees the allocation. Handlers run
+          inside <code>catch_unwind</code>, so a panic becomes an
+          <code>{ "error": … }</code> result rather than unwinding across the FFI
+          boundary.
+        </p>
+      </section>
+
+      <section>
+        <h2>Pure builders</h2>
+        <p>
+          The query-DSL builders (<code>match</code>, <code>term</code>,
+          <code>range</code>, <code>bool</code>, <code>multi_match</code>,
+          <code>bulk_ndjson</code>, <code>escape</code>) and the URL helpers
+          (<code>build_url</code>, <code>parse_url</code>, <code>redact_url</code>)
+          take no connection. They are unit-tested in the crate and pinned by the
+          surface test, so they validate in CI with no cluster present.
+        </p>
+      </section>
+    </main>
+
+    <footer class="tutorial-footer">
+      <p>MIT &middot; MenkeTechnologies</p>
+    </footer>
+  </div>
+  <script src="hud-theme.js"></script>
+</body>
+</html>

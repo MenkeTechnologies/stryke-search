@@ -1,0 +1,87 @@
+## t/test_search.stk — assertion tests for the stryke `Search` package.
+##
+## Uses stryke's native test framework (`assert_*` + `test_run`). Requires
+## the cdylib to be loaded — install once with `s pkg install -g .` so
+## stryke's FFI bridge dlopens `lib/libstryke_search.{dylib,so}` on
+## `use Search`. The data-side asserts also need a live Elasticsearch or
+## OpenSearch at `$SEARCH_URL` (or `127.0.0.1:9200`); they short-circuit
+## when ping fails so CI without a cluster still exits clean on the
+## connection-free asserts.
+
+use Search
+
+# ── permission-free: cdylib reachable ───────────────────────────────
+val $version = Search::version()
+assert_ok $version, "Search::version returns truthy (cdylib loaded)"
+
+# ── connection-free DSL builders ────────────────────────────────────
+assert_eq Search::match("f", "v")->{query}{match}{f}, "v", "match builder"
+assert_eq Search::escape("a:b"), "a\\:b", "escape colon"
+
+# ── liveness probe ──────────────────────────────────────────────────
+var %conn
+$conn{url} = $ENV{SEARCH_URL} if defined $ENV{SEARCH_URL}
+val $alive = eval { Search::ping(%conn) }
+
+if ($alive) {
+    val $idx = "stryke-test-$$"
+
+    # 1. create index with a mapping
+    Search::index_create(
+        $idx,
+        body => { mappings => { properties => { title => { type => "text" }, year => { type => "integer" } } } },
+        %conn,
+    )
+    assert_ok Search::index_exists($idx, %conn), "index created"
+
+    # 2. index a document, refresh so it is searchable
+    Search::doc_index($idx, { title => "rust in action", year => 2019 }, id => "1", %conn)
+    Search::index_refresh(index => $idx, %conn)
+    assert_ok Search::doc_exists($idx, "1", %conn), "doc indexed"
+
+    # 3. get the document back
+    val $got = Search::doc_get($idx, "1", %conn)
+    assert_eq $got->{_source}{title}, "rust in action", "doc_get returns source"
+
+    # 4. search for it
+    val $res = Search::search($idx, Search::match("title", "rust"), %conn)
+    assert_eq $res->{hits}{total}{value}, 1, "match query finds the doc"
+
+    # 5. count
+    val $cnt = Search::count($idx, Search::match_all(), %conn)
+    assert_eq $cnt->{count}, 1, "count returns 1"
+
+    # 6. bulk index two more, refresh, count all
+    Search::bulk(
+        [
+            { action => "index", id => "2", document => { title => "the rust book", year => 2018 } },
+            { action => "index", id => "3", document => { title => "programming rust", year => 2021 } },
+        ],
+        index => $idx,
+        %conn,
+    )
+    Search::index_refresh(index => $idx, %conn)
+    val $all = Search::count($idx, Search::match_all(), %conn)
+    assert_eq $all->{count}, 3, "bulk added two docs"
+
+    # 7. range query on year
+    val $recent = Search::count($idx, Search::range("year", gte => 2020), %conn)
+    assert_eq $recent->{count}, 1, "range query on year"
+
+    # 8. update a document
+    Search::doc_update($idx, "1", { doc => { year => 2020 } }, %conn)
+    Search::index_refresh(index => $idx, %conn)
+    val $after = Search::doc_get($idx, "1", %conn)
+    assert_eq $after->{_source}{year}, 2020, "doc_update applied"
+
+    # 9. delete one document
+    Search::doc_delete($idx, "3", %conn)
+    Search::index_refresh(index => $idx, %conn)
+    assert_eq Search::doc_exists($idx, "3", %conn), 0, "doc deleted"
+
+    # cleanup
+    Search::index_delete($idx, %conn)
+    assert_eq Search::index_exists($idx, %conn), 0, "index deleted"
+}
+
+test_run
