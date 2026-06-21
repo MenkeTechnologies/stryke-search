@@ -122,14 +122,14 @@ The FFI surface, grouped:
 | Group              | Functions                                                                                                   |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- |
 | Cluster + nodes    | `version`, `ping`, `info`, `health`, `cat`, `raw`, `cluster_stats`, `cluster_state`, `cluster_settings_get`, `cluster_settings_put`, `nodes_info`, `nodes_stats`, `pending_tasks`, `allocation_explain` |
-| Index admin        | `index_create`, `index_delete`, `index_exists`, `index_list`, `index_refresh`, `index_open`, `index_close`, `index_stats`, `settings_get`, `settings_update`, `mapping_get`, `mapping_put`, `field_caps` |
+| Index admin        | `index_create`, `index_delete`, `index_exists`, `index_list`, `index_refresh`, `index_open`, `index_close`, `index_stats`, `forcemerge`, `flush`, `clear_cache`, `settings_get`, `settings_update`, `mapping_get`, `mapping_put`, `field_caps` |
 | Aliases            | `alias_add`, `alias_remove`, `alias_get`                                                                     |
 | Templates          | `index_template_put`, `index_template_get`, `index_template_delete`, `index_template_exists`, `component_template_put`, `component_template_get`, `component_template_delete` |
 | Documents          | `doc_index`, `doc_get`, `doc_exists`, `doc_update`, `doc_delete`, `mget`, `bulk`, `termvectors`, `mtermvectors` |
-| Search             | `search`, `count`, `msearch`, `search_aggs`, `scroll_start`, `scroll_next`, `scroll_clear`, `delete_by_query`, `update_by_query`, `reindex`, `analyze`, `explain`, `pit_open`, `pit_close` |
-| Query DSL builders | `match_all`, `match`, `match_phrase`, `match_phrase_prefix`, `term`, `terms`, `range`, `prefix`, `wildcard`, `regexp`, `fuzzy`, `exists`, `ids`, `query_string`, `simple_query_string`, `multi_match`, `geo_distance`, `nested`, `constant_score`, `dis_max`, `bool` |
+| Search             | `search`, `count`, `msearch`, `search_aggs`, `search_shards`, `scroll_start`, `scroll_next`, `scroll_clear`, `delete_by_query`, `update_by_query`, `reindex`, `analyze`, `explain`, `pit_open`, `pit_close` |
+| Query DSL builders | `match_all`, `match`, `match_phrase`, `match_phrase_prefix`, `term`, `terms`, `range`, `prefix`, `wildcard`, `regexp`, `fuzzy`, `exists`, `ids`, `query_string`, `simple_query_string`, `multi_match`, `geo_distance`, `geo_bounding_box`, `nested`, `constant_score`, `dis_max`, `function_score`, `more_like_this`, `bool` |
 | Body + fields      | `query_body`, `sort`, `highlight`, `bulk_ndjson`, `escape`                                                   |
-| Aggregations       | `agg`, `agg_terms`, `agg_avg`, `agg_sum`, `agg_min`, `agg_max`, `agg_stats`, `agg_extended_stats`, `agg_cardinality`, `agg_value_count`, `agg_percentiles`, `agg_histogram`, `agg_date_histogram`, `agg_range`, `agg_filter`, `agg_missing`, `agg_nested` |
+| Aggregations       | `agg`, `agg_terms`, `agg_avg`, `agg_sum`, `agg_min`, `agg_max`, `agg_stats`, `agg_extended_stats`, `agg_cardinality`, `agg_value_count`, `agg_percentiles`, `agg_histogram`, `agg_date_histogram`, `agg_range`, `agg_filter`, `agg_missing`, `agg_nested`, `agg_top_hits`, `agg_global` |
 | Ingest pipelines   | `ingest_put`, `ingest_get`, `ingest_delete`, `ingest_simulate`                                               |
 | Snapshot + repo    | `repo_create`, `repo_get`, `repo_delete`, `snapshot_create`, `snapshot_get`, `snapshot_delete`, `snapshot_restore` |
 | Tasks              | `tasks_list`, `tasks_get`, `tasks_cancel`                                                                    |

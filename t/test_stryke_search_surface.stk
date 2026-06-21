@@ -25,6 +25,9 @@ assert_ok exists &Search::index_refresh, "Search::index_refresh exists"
 assert_ok exists &Search::index_open, "Search::index_open exists"
 assert_ok exists &Search::index_close, "Search::index_close exists"
 assert_ok exists &Search::index_stats, "Search::index_stats exists"
+assert_ok exists &Search::forcemerge, "Search::forcemerge exists"
+assert_ok exists &Search::flush, "Search::flush exists"
+assert_ok exists &Search::clear_cache, "Search::clear_cache exists"
 assert_ok exists &Search::settings_get, "Search::settings_get exists"
 assert_ok exists &Search::settings_update, "Search::settings_update exists"
 assert_ok exists &Search::mapping_get, "Search::mapping_get exists"
@@ -42,6 +45,7 @@ assert_ok exists &Search::bulk, "Search::bulk exists"
 assert_ok exists &Search::search, "Search::search exists"
 assert_ok exists &Search::count, "Search::count exists"
 assert_ok exists &Search::msearch, "Search::msearch exists"
+assert_ok exists &Search::search_shards, "Search::search_shards exists"
 assert_ok exists &Search::scroll_start, "Search::scroll_start exists"
 assert_ok exists &Search::scroll_next, "Search::scroll_next exists"
 assert_ok exists &Search::scroll_clear, "Search::scroll_clear exists"
@@ -76,9 +80,12 @@ assert_ok exists &Search::ids, "Search::ids exists"
 assert_ok exists &Search::query_string, "Search::query_string exists"
 assert_ok exists &Search::simple_query_string, "Search::simple_query_string exists"
 assert_ok exists &Search::geo_distance, "Search::geo_distance exists"
+assert_ok exists &Search::geo_bounding_box, "Search::geo_bounding_box exists"
 assert_ok exists &Search::nested, "Search::nested exists"
 assert_ok exists &Search::constant_score, "Search::constant_score exists"
 assert_ok exists &Search::dis_max, "Search::dis_max exists"
+assert_ok exists &Search::function_score, "Search::function_score exists"
+assert_ok exists &Search::more_like_this, "Search::more_like_this exists"
 # body composer + field helpers
 assert_ok exists &Search::query_body, "Search::query_body exists"
 assert_ok exists &Search::sort, "Search::sort exists"
@@ -101,6 +108,8 @@ assert_ok exists &Search::agg_range, "Search::agg_range exists"
 assert_ok exists &Search::agg_filter, "Search::agg_filter exists"
 assert_ok exists &Search::agg_missing, "Search::agg_missing exists"
 assert_ok exists &Search::agg_nested, "Search::agg_nested exists"
+assert_ok exists &Search::agg_top_hits, "Search::agg_top_hits exists"
+assert_ok exists &Search::agg_global, "Search::agg_global exists"
 assert_ok exists &Search::search_aggs, "Search::search_aggs exists"
 # field caps + term vectors
 assert_ok exists &Search::field_caps, "Search::field_caps exists"
@@ -188,6 +197,22 @@ assert_eq Search::agg_terms("category", size => 5)->{terms}{size}, 5, "agg_terms
 assert_eq Search::agg_avg("price")->{avg}{field}, "price", "agg_avg field"
 assert_eq Search::agg_max("price")->{max}{field}, "price", "agg_max field"
 assert_eq Search::agg_date_histogram("ts", calendar_interval => "day")->{date_histogram}{calendar_interval}, "day", "agg_date_histogram"
+assert_eq Search::agg_top_hits(size => 3)->{top_hits}{size}, 3, "agg_top_hits size"
+assert_ok exists Search::agg_global()->{global}, "agg_global builds global bucket"
+
+# new query builders: geo bbox, function_score, more_like_this
+val $bbox = Search::geo_bounding_box("loc", { lat => 40.73, lon => -74.1 }, { lat => 40.01, lon => -71.12 })
+assert_eq $bbox->{geo_bounding_box}{loc}{top_left}{lat}, 40.73, "geo_bounding_box top_left"
+assert_eq $bbox->{geo_bounding_box}{loc}{bottom_right}{lon}, -71.12, "geo_bounding_box bottom_right"
+
+val $fscore = Search::function_score(Search::match_all(), [{ random_score => {} }], boost_mode => "multiply")
+assert_ok exists $fscore->{function_score}{query}{match_all}, "function_score keeps query"
+assert_eq $fscore->{function_score}{boost_mode}, "multiply", "function_score boost_mode"
+
+val $mlt = Search::more_like_this(["title", "body"], "quick brown fox", min_term_freq => 1)
+assert_eq scalar(@{ $mlt->{more_like_this}{fields} }), 2, "more_like_this fields"
+assert_eq $mlt->{more_like_this}{like}, "quick brown fox", "more_like_this like"
+assert_eq $mlt->{more_like_this}{min_term_freq}, 1, "more_like_this min_term_freq"
 
 # full-body composer auto-includes the parts it is given
 val $body = Search::query_body(query => Search::match("t", "x"), size => 10, aggs => { by_cat => Search::agg_terms("cat") })

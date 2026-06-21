@@ -71,12 +71,12 @@ p $hits-&gt;{hits}{total}{value}</code></pre>
         <h2>API surface</h2>
         <table class="example-tbl">
           <tr><td>Cluster + nodes</td><td>ping, info, health, cat, raw, cluster_stats, cluster_state, cluster_settings_get/put, nodes_info, nodes_stats, pending_tasks, allocation_explain</td></tr>
-          <tr><td>Index admin</td><td>index_create, index_delete, index_exists, index_list, index_refresh, index_open, index_close, index_stats, settings_get/update, mapping_get/put, field_caps</td></tr>
+          <tr><td>Index admin</td><td>index_create, index_delete, index_exists, index_list, index_refresh, index_open, index_close, index_stats, forcemerge, flush, clear_cache, settings_get/update, mapping_get/put, field_caps</td></tr>
           <tr><td>Aliases + templates</td><td>alias_add, alias_remove, alias_get, index_template_put/get/delete/exists, component_template_put/get/delete</td></tr>
           <tr><td>Documents</td><td>doc_index, doc_get, doc_exists, doc_update, doc_delete, mget, bulk, termvectors, mtermvectors</td></tr>
-          <tr><td>Search</td><td>search, count, msearch, search_aggs, scroll_start/next/clear, delete_by_query, update_by_query, reindex, analyze, explain, pit_open/close</td></tr>
-          <tr><td>Query DSL builders</td><td>match_all, match, match_phrase, term, terms, range, prefix, wildcard, regexp, fuzzy, exists, ids, query_string, simple_query_string, multi_match, geo_distance, nested, constant_score, dis_max, bool</td></tr>
-          <tr><td>Aggregations</td><td>agg_terms, agg_avg/sum/min/max, agg_stats, agg_cardinality, agg_percentiles, agg_histogram, agg_date_histogram, agg_range, agg_filter, agg_missing, agg_nested</td></tr>
+          <tr><td>Search</td><td>search, count, msearch, search_aggs, search_shards, scroll_start/next/clear, delete_by_query, update_by_query, reindex, analyze, explain, pit_open/close</td></tr>
+          <tr><td>Query DSL builders</td><td>match_all, match, match_phrase, term, terms, range, prefix, wildcard, regexp, fuzzy, exists, ids, query_string, simple_query_string, multi_match, geo_distance, geo_bounding_box, nested, constant_score, dis_max, function_score, more_like_this, bool</td></tr>
+          <tr><td>Aggregations</td><td>agg_terms, agg_avg/sum/min/max, agg_stats, agg_cardinality, agg_percentiles, agg_histogram, agg_date_histogram, agg_range, agg_filter, agg_missing, agg_nested, agg_top_hits, agg_global</td></tr>
           <tr><td>Body + fields</td><td>query_body, sort, highlight, bulk_ndjson, escape</td></tr>
           <tr><td>Ingest / snapshot / tasks / scripts</td><td>ingest_put/get/delete/simulate, repo_*, snapshot_*, tasks_list/get/cancel, script_put/get/delete, search_template, render_template</td></tr>
           <tr><td>URL helpers</td><td>build_url, parse_url, redact_url</td></tr>

@@ -372,6 +372,45 @@ pub extern "C" fn search__index_stats(args: *const c_char) -> *const c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn search__forcemerge(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        req_json(
+            &v,
+            "POST",
+            &with_params(format!("/{}/_forcemerge", index), &v),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__flush(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        req_json(
+            &v,
+            "POST",
+            &with_params(format!("/{}/_flush", index), &v),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn search__clear_cache(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        req_json(
+            &v,
+            "POST",
+            &with_params(format!("/{}/_cache/clear", index), &v),
+            None,
+        )
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn search__settings_get(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
         let index = opt_str(&v, "index").unwrap_or("_all");
@@ -576,6 +615,22 @@ pub extern "C" fn search__msearch(args: *const c_char) -> *const c_char {
             body.push('\n');
         }
         req_json(&v, "POST", "/_msearch", Some(body))
+    })
+}
+
+/// `GET /{index}/_search_shards` — which indices/shards a search would hit,
+/// for routing/preference diagnostics. `params` forwards `routing`,
+/// `preference`, etc.
+#[no_mangle]
+pub extern "C" fn search__search_shards(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let index = opt_str(&v, "index").unwrap_or("_all");
+        req_json(
+            &v,
+            "GET",
+            &with_params(format!("/{}/_search_shards", index), &v),
+            None,
+        )
     })
 }
 
@@ -1335,6 +1390,76 @@ pub extern "C" fn search__geo_distance_query(args: *const c_char) -> *const c_ch
     })
 }
 
+/// geo_bounding_box query — docs whose `field` falls inside the box defined by
+/// `top_left` / `bottom_right` (each a `{lat, lon}` object or a geohash/string
+/// point, passed through verbatim).
+#[no_mangle]
+pub extern "C" fn search__geo_bounding_box_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let field = str_field(&v, "field")?;
+        let top_left = v.get("top_left").cloned().unwrap_or(Value::Null);
+        let bottom_right = v.get("bottom_right").cloned().unwrap_or(Value::Null);
+        Ok(json!({"value": {"geo_bounding_box": {
+            field: {"top_left": top_left, "bottom_right": bottom_right},
+        }}}))
+    })
+}
+
+/// function_score query — wrap a `query` clause with `functions` that modify
+/// the score. Optional `score_mode` / `boost_mode` passed through when present.
+#[no_mangle]
+pub extern "C" fn search__function_score_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let mut fs = serde_json::Map::new();
+        if let Some(q) = v.get("query").filter(|x| !x.is_null()) {
+            fs.insert("query".into(), q.clone());
+        }
+        if let Some(f) = v.get("functions").filter(|x| !x.is_null()) {
+            fs.insert("functions".into(), f.clone());
+        }
+        for k in [
+            "score_mode",
+            "boost_mode",
+            "min_score",
+            "max_boost",
+            "boost",
+        ] {
+            if let Some(val) = v.get(k).filter(|x| !x.is_null()) {
+                fs.insert(k.to_string(), val.clone());
+            }
+        }
+        Ok(json!({"value": {"function_score": fs}}))
+    })
+}
+
+/// more_like_this query — find documents similar to `like` (a string, doc
+/// reference, or array of either) across `fields`. Optional tuning knobs
+/// (`min_term_freq`, `max_query_terms`, `min_doc_freq`, `minimum_should_match`)
+/// pass through when present.
+#[no_mangle]
+pub extern "C" fn search__more_like_this_query(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let mut mlt = serde_json::Map::new();
+        if let Some(f) = v.get("fields").filter(|x| !x.is_null()) {
+            mlt.insert("fields".into(), f.clone());
+        }
+        let like = v.get("like").cloned().unwrap_or(Value::Null);
+        mlt.insert("like".into(), like);
+        for k in [
+            "min_term_freq",
+            "max_query_terms",
+            "min_doc_freq",
+            "max_doc_freq",
+            "minimum_should_match",
+        ] {
+            if let Some(val) = v.get(k).filter(|x| !x.is_null()) {
+                mlt.insert(k.to_string(), val.clone());
+            }
+        }
+        Ok(json!({"value": {"more_like_this": mlt}}))
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn search__nested_query(args: *const c_char) -> *const c_char {
     ffi_call(args, |v| {
@@ -1559,6 +1684,28 @@ pub extern "C" fn search__agg_nested(args: *const c_char) -> *const c_char {
         let path = str_field(&v, "path")?;
         Ok(json!({"value": {"nested": {"path": path}}}))
     })
+}
+
+/// top_hits metric aggregation — return the top matching documents per bucket.
+/// `size`, `sort`, `_source`, and `from` pass through when present.
+#[no_mangle]
+pub extern "C" fn search__agg_top_hits(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let mut spec = serde_json::Map::new();
+        for k in ["size", "sort", "_source", "from"] {
+            if let Some(val) = v.get(k).filter(|x| !x.is_null()) {
+                spec.insert(k.to_string(), val.clone());
+            }
+        }
+        Ok(json!({"value": {"top_hits": spec}}))
+    })
+}
+
+/// global aggregation bucket — escapes the query scope so sub-aggs see every
+/// document in the index, not just the search hits.
+#[no_mangle]
+pub extern "C" fn search__agg_global(args: *const c_char) -> *const c_char {
+    ffi_call(args, |_| Ok(json!({"value": {"global": {}}})))
 }
 
 // ── full-body field helpers ─────────────────────────────────────────────────
@@ -1990,5 +2137,101 @@ mod tests {
             json!({"value": {"avg": {"field": "price"}}})
         );
         assert!(metric_agg(&json!({}), "sum").is_err());
+    }
+
+    /// Drive a `search__*` builder export through the same JSON-in/JSON-out FFI
+    /// contract stryke uses, returning the parsed response so the unit tests
+    /// assert on the exact clause shape rather than re-deriving it.
+    fn call_ffi(f: extern "C" fn(*const c_char) -> *const c_char, args: Value) -> Value {
+        let input = CString::new(args.to_string()).unwrap();
+        let out_ptr = f(input.as_ptr());
+        let parsed = unsafe {
+            let s = CStr::from_ptr(out_ptr).to_str().unwrap().to_owned();
+            stryke_free_cstring(out_ptr as *mut c_char);
+            s
+        };
+        serde_json::from_str(&parsed).unwrap()
+    }
+
+    #[test]
+    fn geo_bounding_box_builds_box_clause() {
+        let out = call_ffi(
+            search__geo_bounding_box_query,
+            json!({
+                "field": "loc",
+                "top_left": {"lat": 40.73, "lon": -74.1},
+                "bottom_right": {"lat": 40.01, "lon": -71.12},
+            }),
+        );
+        let bb = &out["value"]["geo_bounding_box"]["loc"];
+        assert_eq!(bb["top_left"]["lat"], 40.73);
+        assert_eq!(bb["bottom_right"]["lon"], -71.12);
+    }
+
+    #[test]
+    fn geo_bounding_box_missing_field_errors() {
+        let out = call_ffi(search__geo_bounding_box_query, json!({}));
+        assert!(
+            out.get("error").is_some(),
+            "missing field must error: {out}"
+        );
+    }
+
+    #[test]
+    fn function_score_carries_query_functions_and_modes() {
+        let out = call_ffi(
+            search__function_score_query,
+            json!({
+                "query": {"match_all": {}},
+                "functions": [{"random_score": {}}],
+                "score_mode": "sum",
+                "boost_mode": "multiply",
+            }),
+        );
+        let fs = &out["value"]["function_score"];
+        assert!(fs["query"]["match_all"].is_object());
+        assert_eq!(fs["functions"][0]["random_score"], json!({}));
+        assert_eq!(fs["score_mode"], "sum");
+        assert_eq!(fs["boost_mode"], "multiply");
+        // optional knobs absent → not emitted
+        assert!(fs.get("min_score").is_none());
+    }
+
+    #[test]
+    fn more_like_this_carries_fields_like_and_tuning() {
+        let out = call_ffi(
+            search__more_like_this_query,
+            json!({
+                "fields": ["title", "body"],
+                "like": "a quick brown fox",
+                "min_term_freq": 1,
+                "max_query_terms": 12,
+            }),
+        );
+        let mlt = &out["value"]["more_like_this"];
+        assert_eq!(mlt["fields"], json!(["title", "body"]));
+        assert_eq!(mlt["like"], "a quick brown fox");
+        assert_eq!(mlt["min_term_freq"], 1);
+        assert_eq!(mlt["max_query_terms"], 12);
+        assert!(mlt.get("min_doc_freq").is_none());
+    }
+
+    #[test]
+    fn agg_top_hits_passes_only_present_knobs() {
+        let out = call_ffi(
+            search__agg_top_hits,
+            json!({"size": 3, "sort": [{"ts": {"order": "desc"}}]}),
+        );
+        let th = &out["value"]["top_hits"];
+        assert_eq!(th["size"], 3);
+        assert_eq!(th["sort"][0]["ts"]["order"], "desc");
+        assert!(th.get("_source").is_none());
+        assert!(th.get("from").is_none());
+    }
+
+    #[test]
+    fn agg_global_is_empty_object() {
+        let out = call_ffi(search__agg_global, json!({}));
+        assert_eq!(out["value"]["global"], json!({}));
     }
 }

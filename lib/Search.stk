@@ -119,6 +119,27 @@ fn Search::index_stats (%opts) {
     Search::_decode("index_stats", search__index_stats(to_json($r)))
 }
 
+## Force-merge segments on $index (default `_all`). %opts{params} e.g.
+## { max_num_segments => 1, only_expunge_deletes => "true" }.
+fn Search::forcemerge (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("forcemerge", search__forcemerge(to_json($r)))
+}
+
+## Flush in-memory operations to disk on $index (default `_all`).
+## %opts{params} e.g. { wait_if_ongoing => "true", force => "true" }.
+fn Search::flush (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("flush", search__flush(to_json($r)))
+}
+
+## Clear caches on $index (default `_all`). %opts{params} selects which
+## caches, e.g. { query => "true", fielddata => "true", request => "true" }.
+fn Search::clear_cache (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("clear_cache", search__clear_cache(to_json($r)))
+}
+
 ## Get index settings (default `_all`).
 fn Search::settings_get (%opts) {
     val $r = Search::_req({ index => $opts{index} }, \%opts)
@@ -238,6 +259,13 @@ fn Search::count ($index, $query, %opts) {
 fn Search::msearch ($searches, %opts) {
     val $r = Search::_req({ searches => $searches }, \%opts)
     Search::_decode("msearch", search__msearch(to_json($r)))
+}
+
+## Which indices/shards a search on $index (default `_all`) would target
+## (`GET /$index/_search_shards`). %opts{params} forwards routing/preference.
+fn Search::search_shards (%opts) {
+    val $r = Search::_req({ index => $opts{index} }, \%opts)
+    Search::_decode("search_shards", search__search_shards(to_json($r)))
 }
 
 ## Begin a scroll. Returns the first page plus a `_scroll_id` to pass to
@@ -468,6 +496,13 @@ fn Search::geo_distance ($field, $lat, $lon, $distance) {
     Search::_decode("geo_distance", search__geo_distance_query(to_json($r)))->{value}
 }
 
+## geo_bounding_box query — docs whose $field is inside the box. $top_left and
+## $bottom_right are each `{ lat => .., lon => .. }` (or a geohash/point string).
+fn Search::geo_bounding_box ($field, $top_left, $bottom_right) {
+    val $r = { field => $field, top_left => $top_left, bottom_right => $bottom_right }
+    Search::_decode("geo_bounding_box", search__geo_bounding_box_query(to_json($r)))->{value}
+}
+
 ## nested query over $path with an inner $query clause.
 fn Search::nested ($path, $query) {
     val $r = { path => $path, query => $query }
@@ -485,6 +520,27 @@ fn Search::dis_max ($queries, %opts) {
     val $list = ref($queries) eq "ARRAY" ? $queries : [$queries]
     val $r = { queries => $list, tie_breaker => $opts{tie_breaker} }
     Search::_decode("dis_max", search__dis_max(to_json($r)))->{value}
+}
+
+## function_score query — re-score $query with $functions (arrayref of
+## function objects). %opts: score_mode, boost_mode, min_score, max_boost, boost.
+fn Search::function_score ($query, $functions, %opts) {
+    val $list = ref($functions) eq "ARRAY" ? $functions : [$functions]
+    var %r = %opts
+    $r{query} = $query
+    $r{functions} = $list
+    Search::_decode("function_score", search__function_score_query(to_json(\%r)))->{value}
+}
+
+## more_like_this query — find docs similar to $like (a string, doc reference,
+## or arrayref of either) across $fields (arrayref). %opts: min_term_freq,
+## max_query_terms, min_doc_freq, max_doc_freq, minimum_should_match.
+fn Search::more_like_this ($fields, $like, %opts) {
+    val $list = ref($fields) eq "ARRAY" ? $fields : [$fields]
+    var %r = %opts
+    $r{fields} = $list
+    $r{like} = $like
+    Search::_decode("more_like_this", search__more_like_this_query(to_json(\%r)))->{value}
 }
 
 # ── full-body composers + field helpers (no connection) ───────────────
@@ -595,6 +651,17 @@ fn Search::agg_missing ($field) {
 ## nested aggregation over $path.
 fn Search::agg_nested ($path) {
     Search::_decode("agg_nested", search__agg_nested(to_json({ path => $path })))->{value}
+}
+
+## top_hits aggregation — top matching docs per bucket. %opts: size, sort,
+## _source, from.
+fn Search::agg_top_hits (%opts) {
+    Search::_decode("agg_top_hits", search__agg_top_hits(to_json(\%opts)))->{value}
+}
+
+## global aggregation bucket — sub-aggs see every doc, ignoring the query scope.
+fn Search::agg_global {
+    Search::_decode("agg_global", search__agg_global("{}"))->{value}
 }
 
 # ── aggregations runner ───────────────────────────────────────────────
