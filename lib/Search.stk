@@ -393,6 +393,12 @@ fn Search::redact_url ($url) {
     Search::_decode("redact_url", search__redact_url(to_json($r)))->{value}
 }
 
+## Validate an ES/OpenSearch index $name against the engine's naming rules.
+## Returns a hashref { name, valid, reason }. Pure — no request.
+fn Search::valid_index_name ($name) {
+    Search::_decode("valid_index_name", search__valid_index_name(to_json({ name => $name })))
+}
+
 # ── more query-DSL builders (no connection) ───────────────────────────
 
 ## Phrase match on $field.

@@ -1,6 +1,6 @@
 [package]
 name = "stryke-search"
-version = "0.2.0"
+version = "0.3.0"
 description = "Elasticsearch / OpenSearch client for stryke. cdylib loaded in-process — persistent ureq Agent (HTTP keep-alive pool) cached per (base_url, auth)."
 authors = ["MenkeTechnologies"]
 license = "MIT"
@@ -136,6 +136,7 @@ exports = [
     "search__build_url",
     "search__parse_url",
     "search__redact_url",
+    "search__valid_index_name",
 ]
 
 [scripts]

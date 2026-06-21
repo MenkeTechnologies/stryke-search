@@ -1636,6 +1636,17 @@ pub extern "C" fn search__redact_url(args: *const c_char) -> *const c_char {
     })
 }
 
+/// Validate an ES/OpenSearch index name against the engine's hard naming rules.
+/// Returns `{name, valid, reason}`. Pure — no request.
+#[no_mangle]
+pub extern "C" fn search__valid_index_name(args: *const c_char) -> *const c_char {
+    ffi_call(args, |v| {
+        let name = str_field(&v, "name")?;
+        let (valid, reason) = valid_index_name(name);
+        Ok(json!({"name": name, "valid": valid, "reason": reason}))
+    })
+}
+
 // ── shared pure logic (unit-tested below) ───────────────────────────────────
 
 /// Read a field that may arrive as either a JSON string or an object/array,
@@ -1735,6 +1746,30 @@ fn escape_lucene(s: &str) -> String {
     out
 }
 
+/// Validate an Elasticsearch / OpenSearch index name against the engine's hard
+/// rules: lowercase only; no `\ / * ? " < > | `, space, comma, or `#`; must not
+/// start with `-`, `_`, or `+`; must not be `.` or `..`; at most 255 bytes.
+/// Returns `(valid, reason)`.
+fn valid_index_name(name: &str) -> (bool, Option<&'static str>) {
+    const FORBIDDEN: &[char] = &['\\', '/', '*', '?', '"', '<', '>', '|', ' ', ',', '#'];
+    let reason = if name.is_empty() {
+        Some("must not be empty")
+    } else if name == "." || name == ".." {
+        Some("must not be '.' or '..'")
+    } else if name.starts_with('-') || name.starts_with('_') || name.starts_with('+') {
+        Some("must not start with '-', '_', or '+'")
+    } else if name.chars().any(|c| c.is_uppercase()) {
+        Some("must be lowercase")
+    } else if name.chars().any(|c| FORBIDDEN.contains(&c)) {
+        Some("must not contain a space, comma, '#', or any of: \\ / * ? \" < > |")
+    } else if name.len() > 255 {
+        Some("must be at most 255 bytes")
+    } else {
+        None
+    };
+    (reason.is_none(), reason)
+}
+
 /// Decompose `scheme://user:pass@host:port/path` into parts. Missing pieces
 /// come back as null/defaults; the default port follows the scheme
 /// (`https` → 9243-style clusters still default to 9200 here, callers can
@@ -1790,6 +1825,35 @@ fn redact_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_index_name_enforces_es_rules() {
+        assert!(valid_index_name("books").0);
+        assert!(valid_index_name("logs-2025.06.20").0);
+        for (name, want) in [
+            ("", "empty"),
+            (".", "'.'"),
+            ("..", "'.'"),
+            ("_hidden", "start with"),
+            ("-lead", "start with"),
+            ("+plus", "start with"),
+            ("Books", "lowercase"),
+            ("a b", "space"),
+            ("a/b", "\\"),
+            ("a,b", "space"),
+            ("a#b", "#"),
+        ] {
+            let (valid, reason) = valid_index_name(name);
+            assert!(!valid, "{name:?} should be invalid");
+            assert!(
+                reason.unwrap().contains(want),
+                "{name:?}: reason `{}` should mention `{want}`",
+                reason.unwrap()
+            );
+        }
+        assert!(!valid_index_name(&"a".repeat(256)).0);
+        assert!(valid_index_name(&"a".repeat(255)).0);
+    }
 
     #[test]
     fn ndjson_index_and_delete() {

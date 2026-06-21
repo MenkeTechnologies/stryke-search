@@ -135,6 +135,7 @@ The FFI surface, grouped:
 | Tasks              | `tasks_list`, `tasks_get`, `tasks_cancel`                                                                    |
 | Stored scripts     | `script_put`, `script_get`, `script_delete`, `search_template`, `render_template`                           |
 | URL helpers        | `build_url`, `parse_url`, `redact_url`                                                                       |
+| Validation         | `valid_index_name`                                                                                           |
 
 Query builders return **bare clauses** (e.g. `{"match":{…}}`), so they nest
 directly inside `bool` / `nested` / `constant_score`. `Search::search` and
