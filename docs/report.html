@@ -70,14 +70,73 @@
       </section>
 
       <section>
+        <h2>Request building</h2>
+        <p>
+          Every network wrapper builds its request hash through one helper,
+          <code>Search::_req</code>. It copies the connection keys
+          (<code>url</code>, <code>host</code>, <code>port</code>,
+          <code>username</code>, <code>password</code>, <code>api_key</code>,
+          <code>tls</code>, <code>params</code>) from the caller's
+          <code>%opts</code>, filtering out undefined values so the cdylib
+          applies its own defaults (<code>127.0.0.1:9200</code>, scheme from
+          <code>tls</code>). When neither <code>url</code> nor <code>host</code>
+          is supplied it falls back to the <code>$SEARCH_URL</code> environment
+          variable. Per-operation fields (index, id, body, query, ops, …) are
+          merged in by each wrapper before the hash is JSON-encoded and handed to
+          the FFI symbol.
+        </p>
+      </section>
+
+      <section>
+        <h2>Error dispatch</h2>
+        <p>
+          Every wrapper routes its FFI return through
+          <code>Search::_decode</code>, which parses the JSON and, when the
+          result is a hash carrying an <code>error</code> key, raises
+          <code>die "Search::&lt;fn&gt;: &lt;reason&gt;"</code>. Callers see a
+          stryke exception instead of a silent error hash. Boolean-style
+          wrappers (<code>ping</code>, <code>index_exists</code>,
+          <code>doc_exists</code>, <code>index_template_exists</code>) unwrap the
+          <code>value</code> field; list wrappers (<code>index_list</code>,
+          <code>cat</code>) dereference the returned array.
+        </p>
+      </section>
+
+      <section>
         <h2>Pure builders</h2>
         <p>
           The query-DSL builders (<code>match</code>, <code>term</code>,
           <code>range</code>, <code>bool</code>, <code>multi_match</code>,
-          <code>bulk_ndjson</code>, <code>escape</code>) and the URL helpers
-          (<code>build_url</code>, <code>parse_url</code>, <code>redact_url</code>)
-          take no connection. They are unit-tested in the crate and pinned by the
-          surface test, so they validate in CI with no cluster present.
+          <code>geo_bounding_box</code>, <code>function_score</code>,
+          <code>more_like_this</code>, …), the aggregation builders
+          (<code>agg_terms</code>, <code>agg_date_histogram</code>,
+          <code>agg_top_hits</code>, <code>agg_global</code>, …), the body and
+          field composers (<code>query_body</code>, <code>sort</code>,
+          <code>highlight</code>, <code>bulk_ndjson</code>, <code>escape</code>),
+          and the URL helpers (<code>build_url</code>, <code>parse_url</code>,
+          <code>redact_url</code>, <code>valid_index_name</code>) take no
+          connection. They return bare clauses that nest directly inside other
+          builders. They are unit-tested in the crate and pinned by the surface
+          test, so they validate in CI with no cluster present.
+        </p>
+      </section>
+
+      <section>
+        <h2>Test + build matrix</h2>
+        <p>
+          The crate is <code>cdylib</code>-only, so the integration test asserts
+          only that the crate type-checks and links. The real coverage is in
+          <code>src/lib.rs</code>'s <code>#[cfg(test)]</code> module (NDJSON
+          build, Lucene escaping, URL parse / redact, basic-auth header,
+          percent-encoding), the <code>t/test_stryke_search_surface.stk</code>
+          surface pin (every <code>Search::*</code> wrapper resolves and every
+          builder produces the right shape, no cluster), and
+          <code>t/test_search.stk</code> (end-to-end CRUD + search against a live
+          cluster, short-circuited when none answers). CI runs
+          <code>cargo check</code>, <code>fmt</code>, <code>clippy -D
+          warnings</code>, <code>cargo test</code> on Ubuntu and macOS,
+          <code>cargo doc -D warnings</code>, release builds for the three host
+          triples, and the docs / README gate suite.
         </p>
       </section>
     </main>
